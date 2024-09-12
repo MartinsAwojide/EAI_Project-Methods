@@ -1,0 +1,1217 @@
+                                             Model Compression in Practice: Lessons Learned from
+                                        Practitioners Creating On-device Machine Learning Experiences
+                                                    Fred Hohman                                 Mary Beth Kery                           Donghao Ren                       Dominik Moritz
+                                                        Apple                                         Apple                                   Apple                               Apple
+                                                  Seattle, WA, USA                             Pittsburgh, PA, USA                      Seattle, WA, USA                   Pittsburgh, PA, USA
+                                              fredhohman@apple.com                             mkery@apple.com                        donghao@apple.com                   domoritz@apple.com
+
+                                        ABSTRACT                                                                                    and power than the device in your pocket. Yet for delivering intel-
+                                        On-device machine learning (ML) promises to improve the privacy,                            ligent user experiences, there is good reason to move ML models
+                                        responsiveness, and proliferation of new, intelligent user experi-                          onto personal computing devices people use every day.
+arXiv:2310.04621v2 [cs.HC] 3 Apr 2024
+
+
+
+
+                                        ences by moving ML computation onto everyday personal devices.                                 On-device ML is the practice of storing, training, and running ML
+                                        However, today’s large ML models must be drastically compressed                             models on an individual’s device, such as a smartphone, tablet, or
+                                        to run efficiently on-device, a hurtle that requires deep, yet cur-                         wearable. However, as today’s state-of-the-art models grow larger
+                                        rently niche expertise. To engage the broader human-centered ML                             and larger in size (e.g., into the billions of parameters [33, 94, 104,
+                                        community in on-device ML experiences, we present the results                               127]), efficiency remains the biggest barrier to on-device ML [9, 23].
+                                        from an interview study with 30 experts at Apple that specialize                            An arbitrary ML model placed on a mobile device can easily con-
+                                        in producing efficient models. We compile tacit knowledge that                              sume every available resource of the device, whether it be compute,
+                                        experts have developed through practical experience with model                              memory, or battery. Creating efficient, on-device models brings
+                                        compression across different hardware platforms. Our findings of-                           new challenges to the ML development process.
+                                        fer pragmatic considerations missing from prior work, covering                                 In this paper, we argue that research in efficient machine learning
+                                        the design process, trade-offs, and technical strategies that go into                       over the past decade has matured to the degree to where practi-
+                                        creating efficient models. Finally, we distill design recommenda-                           tioners have an (albeit rapidly evolving) set of techniques to make
+                                        tions for tooling to help ease the difficulty of this work and bring                        on-device ML a reality. The key idea is to shrink, optimize, and
+                                        on-device ML into to more widespread practice.                                              compress models, while simultaneously maintaining their accuracy.
+                                                                                                                                    To achieve this, practitioners develop strategies for how to best
+                                        CCS CONCEPTS                                                                                apply model compression techniques to minimize the amount of
+                                                                                                                                    computational resources needed. Product designers, tool-builders,
+                                        • Human-centered computing → Interactive systems and                                        and ML practitioners today should be considering the benefits of
+                                        tools; • Computing methodologies → Machine learning; Artifi-                                on-device ML for their users:
+                                        cial intelligence.                                                                             First, on-device ML can be an enormous win for personal privacy.
+                                                                                                                                    While standard practice today is to send a user’s (encrypted) data
+                                        KEYWORDS                                                                                    over a network to servers for ML inference, on-device ML cuts out
+                                        Efficient machine learning, model compression, on-device machine                            this dependency such that a user’s personal data never leaves their
+                                        learning, interview study, interactive systems, design directions                           device. Beyond inference, pre-trained models can be fine-tuned on-
+                                                                                                                                    device to adapt to an individual user’s preferences, while keeping
+                                        ACM Reference Format:                                                                       those preferences private and local [10, 49, 54].
+                                        Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz. 2024.                            Second, models on-device enable intelligent user experiences
+                                        Model Compression in Practice: Lessons Learned from Practitioners Cre-
+                                                                                                                                    where they would not be possible otherwise. For example, compu-
+                                        ating On-device Machine Learning Experiences. In Proceedings of the CHI
+                                        Conference on Human Factors in Computing Systems (CHI ’24), May 11–
+                                                                                                                                    tational photography models within mobile cameras run inference
+                                        16, 2024, Honolulu, HI, USA. ACM, New York, NY, USA, 18 pages. https:                       at high frame rates (e.g., 30 frames per second), which would not
+                                        //doi.org/10.1145/3613904.3642109                                                           be possible if relying on the availability of a distant server.
+                                                                                                                                       Third, by going offline, on-device ML can create not only faster
+                                                                                                                                    but also more portable experiences. Since no data is sent over a net-
+                                        1     INTRODUCTION                                                                          work, users can still interact with ML-powered features in situations
+                                        Most modern machine learning (ML) models in production today                                without internet access or cellular service. This has the potential
+                                        occupy cloud servers of exceedingly more computational capacity                             to broaden access of AI/ML features in more geographic regions,
+                                                                                                                                    including rural and remote areas [99]. By forgoing a network en-
+                                                                                                                                    tirely, ML-powered features can run faster and remain responsive
+                                        Permission to make digital or hard copies of part or all of this work for personal or       by alleviating network latency in an “offline” mode [23].
+                                        classroom use is granted without fee provided that copies are not made or distributed
+                                        for profit or commercial advantage and that copies bear this notice and the full citation      Lastly, removing the reliance on servers for ML inference has
+                                        on the first page. Copyrights for third-party components of this work must be honored.      economic and environmental impact. On-device ML cuts out the
+                                        For all other uses, contact the owner/author(s).
+                                                                                                                                    cost of a server, which may help individuals, non-profits, or smaller
+                                        CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+                                        © 2024 Copyright held by the owner/author(s).                                               tech firms that previously could not afford server upkeep to now
+                                        ACM ISBN 979-8-4007-0330-0/24/05.                                                           deliver ML-powered features to their users. By reducing society’s
+                                        https://doi.org/10.1145/3613904.3642109
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                           Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+reliance on external servers, on-device ML may help reduce the           practice [7, 8, 12, 42, 60, 88, 119], and we extend prior work into a
+carbon footprint of the cloud [73].                                      previously unconsidered area of ML (Section 2.2). We situate our
+   In this paper, we seek to advocate for on-device ML by filling a      work in both of these directions, and end by covering related work
+crucial gap: while efficient ML research and algorithmic advances        on model efficiency for on-device ML itself (Section 2.3).
+have progressed tremendously [25, 37, 68, 91, 122, 126], there cur-
+rently exists little pragmatic guidance [76] in literature, online, in   2.1    Ubiquitous Computing: Deploying ML on
+books, or otherwise, for people wanting to create on-device ML                  Mobile & Edge Devices
+user experiences. On-device ML requires both clever algorithmic
+and user experience design, making this a fundamentally interdis-        Challenges of on-device ML often occur in the context of mobile
+ciplinary problem that has received limited attention outside of ML      or edge computing [16, 75, 131]. Edge computing refers to small
+venues. Our work addresses: RQ: How should a broader audi-               embedded hardware, wearables, or internet-of-things (IoT) devices
+ence of HCI and ML practitioners today optimize powerful                 where at least some computation is performed on-device (the “edges”
+models to design on-device, ML user experiences?                         of a network) rather than by a central server [75]. Example uses of
+   To curate pragmatic guidance, we interviewed 30 expert industry       compressed neural networks include facial recognition on mobile
+practitioners who are uniquely experienced with designing, devel-        devices [129], activity recognition on cameras [71], gesture recogni-
+oping, and deploying on-device ML at scale. We capture the hard-         tion on smartwatches [117], and respiratory monitoring on phones
+won knowledge, insights, and tricks-of-the-trade that are tradition-     and smartwatches [15, 20, 61]. Since efficiency is critical for edge
+ally omitted from technical ML publications. We draw connections         devices, the Ubiquitous computing, Mobile computing, and IoT re-
+between the design of ML user experiences and the compression            search communities have contributed model compression advances
+strategies experts use to match design goals. We contribute:             around dynamic models [65, 70, 108], structured sparsity [62], and
+                                                                         on-device training [51, 58, 120]. Our work differs from prior litera-
+     • Tacit knowledge that 30 expert practitioners have de-             ture by not focusing on any single application or technique, and
+       veloped around the design processes, trade-offs, and strate-      instead synthesizing practitioner strategies for model compression
+       gies that go into deploying efficient on-device ML. Many          that can be used across use cases and hardware types. In our re-
+       decisions around optimization and compression strategy            search, we interviewed ML practitioners deploying to a variety of
+       stem directly from user experience and product design.            consumer devices, including edge hardware. We distinguish be-
+     • A characterization of the key challenges practitioners            tween device type only where advice differs for small embedded
+       face when creating efficient models. Examples include the         hardware, for example in Section 5.4.4.
+       tension between optimizing performance against accuracy,
+       and the necessity to work with hardware-level details.            2.2    Human-Computer Interaction: Studying
+     • Distilled design recommendations for interactive in-                     AI/ML Practitioners
+       terfaces, tooling, and systems that show promise to help          Over the past decade, interview studies from HCI have played an
+       practitioners optimize models and ultimately proliferate on-      important role in giving the public access to learn from AI/ML work
+       device ML experiences.                                            that otherwise happens behind closed doors [7, 8, 12, 42, 60, 88, 119].
+   We conclude by discussing where the broader HCI + AI/ML               Interviews with practitioners are uniquely suited to capture the
+research, design, and practitioner communities can engage in effi-       kinds of process-oriented insight, stories, and tricks-of-the-trade
+cient, on-device ML. We hope the results from this deep dive into        that are traditionally omitted from technical ML publications. For
+a nascent area of ML user experience design helps spotlight its          instance, Amershi et al. [7] interview and survey AI/ML practition-
+interdisciplinary importance and inspires others to contribute.          ers at Microsoft to gather best practices for production ML devel-
+                                                                         opment. Researchers have studied how AI/ML teams collaborate
+2    RELATED WORK IN HUMAN-CENTERED                                      across diverse technical roles [79, 81, 124], or adopt new technology
+                                                                         like AutoML [105–107]. Sambasivan et al. [88] used interviews to
+     ML AND MODEL OPTIMIZATION                                           profile organizational struggles between balancing modeling work
+Our work attempts to bridge the Machine Learning, Ubiquitous             with data quality work. Holstein et al. [42] found key mismatches
+Computing, Mobile Computing, and Human–Computer Interac-                 between academic AI/ML fairness concepts and the kinds of real
+tion (HCI) communities, to build common language around an ML            fairness issues product teams grapple with. Many other aspects
+topic with broad, intersectional impact. Our biggest challenge is        of AI fairness, accountability, transparency, and ethics have been
+in situating this research where no direct prior work exists. In         found to be practitioner-driven, where design decisions and process
+this section, we anchor our work in two main threads of HCI re-          have enormous impact [21, 43, 46, 66, 67, 72, 86, 87]. Like this prior
+search. First, overlapping with the HCI community, the Ubicomp           work, we examine the production and practice side of on-device
+and Mobile computing communities have long used model com-               ML efficiency to illustrate the connection between ML compression
+pression for on-device ML to make new user experiences possi-            choices and their impact on holistic ML user-experience design.
+ble [24]. Our work complements this literature by consolidating
+together strategies across many use cases, with the aim of broad-        2.2.1 User Experience Design for AI/ML. Much of what the research
+ening the audience of practitioners who can contribute to creating       community knows today about designing effective user experiences
+on-device ML systems (Section 2.1). Second, our research contin-         (UX) for AI/ML comes from interviews with seasoned product de-
+ues a line of HCI work synthesizing lessons from real-world ML           signers [112, 119, 121, 123]. Leading technology companies have
+Model Compression in Practice                                                                             CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+
+
+distilled design wisdom from their own product teams into AI/ML           2.3.3 Publicly Available Compression Resources. While most com-
+design guidelines as public, educational resources [114]. Examples        pression techniques originate in academic work [17, 19, 22], many
+include Apple’s Human Interface Guidelines on Machine Learn-              resources for practitioners can be found within web tutorials and
+ing [3], Microsoft’s Human-AI Guidelines [8], Google’s People +           ML toolkits. Examples include TensorFlow’s quantization-aware
+AI Guidebook [4], and IBM’s Design for AI resources [2]. This             training method [96, 97]; PyTorch’s experimental support for quan-
+body of work emphasizes that designing with machine learning              tization [83], sparsity [84], and it’s accompanying examples [85];
+requires new approaches from designers [2, 4, 8, 112, 118, 121]. Our      Google’s quantization extension to Keras called QKeras [35]; Mi-
+paper contributes to this conversation by illustrating how power          crosoft’s Neural Network Intelligence package and tool [69]; Intel’s
+and performance issues of moving ML models on-device create               Neural Compressor library [50]; and Apple’s MLX framework [39]
+real, tangible UX constraints for designers (for example, see Table       and DNIKit [111]. Other examples that target specific hardware
+2), and offers concrete design strategies for creating effective user     include speeding up inference on FPGAs [28] and compressing Core
+experiences around those constraints (for example, see Section 5.4).      ML models to run on Apple platforms [9]. In terms of other com-
+                                                                          munity efforts, the appropriately named TinyML community has
+                                                                          published a book [110] and hosts community events and meetups.
+2.3     Machine Learning: On-Device ML &
+        Compression Techniques                                            3     A PRIMER ON MACHINE LEARNING
+The literature on efficient machine learning is broader than the                COMPRESSION TECHNIQUES
+scope of this paper, and for a comprehensive look we refer readers to
+the excellent survey papers cited here and below [17, 19, 22, 68, 101].   To familiarize readers with model optimization, here we give a
+For neural networks, Menghani [68] breaks efficiency into 5 areas:        primer on common ML compression techniques. This background
+(1) compression techniques, (2) learning techniques, (3) automation,      will help ground the study results and provide context for the
+(4) efficient architectures, and (5) infrastructure & hardware. Our       remainder of the paper. Note we only cover common techniques
+interviews with practitioners contained more discussion of (1) and        mentioned by practitioners in our study—more exist.
+(5), and some discussion of (2) and (4). We do not claim that this in-       Model compression is a class of techniques used in on-device ML
+terview study is a comprehensive look at efficient machine learning.      to reduce the computational resources a model consumes. While it is
+Nonetheless, our work adds a fresh perspective to existing efficient      not important to know every detail of every technique, it is useful to
+ML literature: instead of detailing specific optimization techniques,     understand the variety of techniques at a high-level, and how they
+here we profile higher-level strategies for how practitioners put         can be combined for bigger savings [38]. This overview contains
+techniques into practice to enable user-experience goals.                 a brief description of each technique, and includes illustrations
+                                                                          to build visual intuition. Note that each technique below is truly
+2.3.1 On-device Inference vs. On-device Training. It is worthwhile to     a family of techniques, each with many nuanced variations. For
+distinguish between on-device inference and on-device training. On-       an in-depth review of the technical descriptions of compression
+device inference refers to running an ML model on new input to get        techniques, see the following surveys: [17, 19, 22, 68].
+a prediction. These models are typically pretrained on a server, then
+delivered to a device. On-device training refers to either training a     3.1    Quantization
+model from scratch or fine-tuning a model on a user’s device. While       Convert the inputs, outputs, weights, and/or activations of a model
+work in on-device ML encompasses both paradigms, in our paper             from high-precision representations (e.g., fp32) to lower-precision
+we focus on the (currently) more common use case of on-device             representations (e.g., fp16, int32, int16, int8, and even int2).
+inference and leave on-device training for future work. Training          At a high-level, this coarsens a model. For a detailed survey of
+on-device is generally considered harder, since training usually          quantization-specific techniques and their variations, see [32].
+requires far more resources [131]. For a survey on the current
+challenges around on-device learning, see: [25, 64, 75, 131].
+
+2.3.2 On-device Large Language Models and Foundation Models. In
+recent years, large language models (LLMs) and other generalized
+foundation models have raised the magnitude of size we expect from        3.2    Palettization (Weight Clustering)
+ML models [33, 74, 93, 104]. As models get bigger, so do the stakes       Map the weights of a model to a discrete set of precomputed (or
+for model compression and on-device efficiency [13]. Beyond speed-        learned) values [18, 115]. Inspired by an artist’s palette, the idea is
+ing up inference [6], efficiency methods for LLMs also aim to lower       to map many similar values to one average or approximate value,
+their enormous pretraining and fine-tuning costs. Examples in-            then use those new values for computing inference. In this way,
+clude low-rank adaption methods (e.g., LRPD [128] and LoRA [48]),         palettization is similar in spirit to algorithmic memoization, a dic-
+and parameter-efficient fine-tuning methods [26, 27, 30, 59]. The         tionary, or a look-up table. Palettization can make a model smaller
+number of empirical works for compressing LLMs from 2023 alone            but does not make a model faster since it incurs look-up time.
+would be difficult to capture, therefore we refer interested readers
+to the following surveys: [101, 116, 130]. We note that many of the
+techniques for compression that we discuss in Section 3 are the
+same key ideas being applied to LLMs and foundation models.
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                          Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+3.3     Pruning (Network Sparsity)                                      3.6    Dynamic Models
+Remove the least-important parts of a neural network to make            When thinking about ML applications, most people think of a single
+it smaller [41]. The motivating idea is that modern neural net-         model with fixed inputs and outputs. Dynamic models differ in that
+works are much more dense and overparameterized than is actually        they take into account the differing prediction difficulty of each
+needed. Since networks can contain billions of parameters, remov-       data input. Depending on the input, a dynamic model may adapt
+ing some or many parameters may not impact the final accuracy.          its preprocessing steps, computational path, or model choice all
+Pruning is a large family of techniques [41].                           together [132]. While many types of dynamic models exist, we only
+                                                                        discuss a selection of techniques that are mentioned later on.
+3.3.1 Unstructured Pruning. A model may have neurons or weights
+that do not much affect a model’s decision [32]. In unstructured        3.6.1 Early Exit Models. Allow for completing a prediction without
+pruning, the least important neurons or weights can be aggres-          the need to pass through the full model. Motivated by the fact that
+sively removed without affecting model accuracy [41]. Unstruc-          some data points are easier to predict than others, early exit models
+tured pruning has been shown to shrink a model by 10–100x its           run intermediate feature representations through additional output
+original size [41]. The major downside is that this leads to sparse     layers to check if the prediction is sufficiently correct. For example,
+matrix operations, which is a type of math that is slow on most hard-   if a model is already confident about the current prediction, it
+ware. So although pruned models are small, they may be nearly as        finishes early rather than continuing to the next prediction layer.
+slow as the full-sized model [32].                                      3.6.2 Gated Models. Train a smaller, approximate model whose
+                                                                        prediction decides whether or not to invoke a larger model. Similar
+                                                                        to early exit models, some data points are easier to predict than
+                                                                        others. A fast, smaller model gates a larger model, for example by
+                                                                        again using the confidence of the initial prediction. At a high-level,
+                                                                        these are systems of models that decide whether or not to spend
+3.3.2 Structured Pruning. Similar to unstructured pruning, the          extra compute if a prediction is still uncertain or unknown.
+least important neurons or weights are identified, however, in-
+stead of removing (or zero-ing out) individual values, structured       4 INTERVIEW STUDY METHODOLOGY
+pruning removes entire structural elements, like channels or filters.
+Since structured pruning removes much bigger chunks of a model,         4.1 Study Protocol
+less pruning will be possible without serious degradation in model      To capture emerging practices around efficient machine learning,
+accuracy [32]. However, by respecting the structure of the model,       we conducted semi-structured interviews [14, 53] with 30 ML prac-
+these pruned models maintain dense matrix operations, which keeps       titioners at Apple to study how they approach model compression
+the model fast on most hardware [41].                                   in their own work. Our interview questions are outlined in Appen-
+                                                                        dix A. We gave participants ample time to flexibly speak to their
+                                                                        specific work and express other topics beyond our question set
+                                                                        that they felt were important to effectively optimizing models [53].
+                                                                        The interviews took place between March and July 2022 with each
+                                                                        conversation lasting from 45 minutes to 1 hour. For all interviews,
+3.4     Distillation                                                    one researcher lead the interview questions, while another took
+                                                                        detailed notes. Where a participant approved, we also recorded
+Train a smaller model to mimic a larger model. Given a larger           conversations to refer back to during analysis. No compensation
+(teacher) model that is already highly accurate, transfer its learned   was given, since all participants were salaried employees. At the
+features to a smaller (student) model by having the smaller model       end of the study, we briefed participants and their teams on our
+replicate the larger model’s output. One can then apply other com-      results. Our study protocol was approved by an internal IRB.
+pression techniques to the student model for further optimiza-
+tion [32, 82]. For a survey of distillation techniques, see [36].       4.2    Participants and Recruitment
+                                                                        As discussed in Section 2, in-depth interview studies with ML
+                                                                        practitioners are uniquely suited to capture experts’ tacit knowl-
+                                                                        edge for the purpose of generating new, publicly-available guid-
+                                                                        ance [7, 8, 12, 42, 60, 88, 119]. Our organization has a rare concen-
+                                                                        tration of efficient machine learning experts, so we first reached
+3.5     Efficient Neural Architectures                                  out to known individuals. We then used a snowball sampling strat-
+Some model architectures are specifically designed to be small and      egy to reach a broader network of people involved in efficient
+efficient. Prominent example architectures include MobileNets [47,      machine learning. To balance different perspectives, we sought
+89], ShuffleNets [125], and EfficientNets [95]. All of these examples   practitioners working on ML for different domains and tasks (e.g.,
+are designed to improve the efficiency of convolutions, which are       vision, language, and sensing). As the study evolved, we also chose
+vital to fitting computer vision models on-device [19]. One can use     new participants to help fill-in our largest areas of uncertainty.
+other compression technqiues on efficient architectures to create       Our participants, listed in Table 1, include ML research scientists,
+even smaller models [19].                                               engineers, and managers spanning a wide breadth of application
+Model Compression in Practice                                                                             CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+
+
+domains. A natural saturation occurred when participants began            by Amershi et al. [7] as a reference point to map onto (in sum-
+to repeat know-how we had already recorded and began to only              mary: model and data requirements, model development and training,
+suggest participants we had already included.                             and model evaluation). Similar to specifying model requirements
+                                                                          within ML [7], we characterize how practitioners design on-device
+4.3     Qualitative Data Analysis                                         machine learning experiences (Section 5.3) and plan model bud-
+The first two authors conducted an iterative thematic analysis            gets (Section 5.4). Next, we discuss how compression affects the
+method to group common motivations, challenges, and best prac-            model development and training process, and offer considerations
+tices of model compression into categories [34]. As we conducted          for how people can strategize applying compression to their own
+more interviews, we continually discussed and updated these cat-          work (Section 5.5). Lastly, we describe how practitioners evaluate
+egories to reflect our new findings. Each participant’s data and          compressed models to balance accuracy versus performance—and
+transcripts were independently reviewed and manually coded by             avoid accidental compression artifacts (Section 5.6).
+the first two authors at least twice using inductive coding [98]. In         Throughout the results we highlight actionable takeaways in
+total, we spent 30+ hours interviewing participants and collected          call-out boxes . Note that some of these strategies are unique to
+23,500+ words of additional notes outside of the audio transcripts.       model compression for on-device ML, while other strategies add
+The final categories were split into two main sections: Section 5         a model compression twist to already-familiar software efficiency
+“Study Results” and Section 6 “Design Opportunities for Efficient ML      ideas. We include both to balance domain-specific novelty with the
+Tools and Interfaces.” The composition of these two sections was          key advice for on-device ML.
+formed by ordering major categories and hierarchically grouping
+within categories when relevant.                                          5.1     Participants and Emergent Personas
+                                                                          Who does on-device ML efficiency? Of the 30 people we interviewed,
+4.4     Methodological Limitations                                        participants had an average of 7.1 (max 12) years experience with
+While we found that learning from expert practitioners was tremen-        ML, and an average 4.1 (max 10) years experience with efficient ML.
+dously valuable, any interview study has limits for generalizability.     Our participants had diverse breadth of expertise across domains,
+Interview studies suffer from smaller population samples than other       detailed in Table 1. Rather than their job title, we found that par-
+methods like a survey. We chose to hold in-depth exploratory con-         ticipant perspectives on efficient machine learning aligned more
+versations with each participant—which a survey cannot support            closely with their application focus. For the purpose of understand-
+as well [53]. On the other hand, we did not directly observe par-         ing practitioners contributions, we define three distinct, emergent
+ticipants conducting their efficient machine learning work, which         personas that best describe our participants:
+limits the specificity of our findings. It was not possible to observe          • Compression Experts (E1–E13 in Table 1): Seasoned re-
+all participant’s activity or model artifacts due to the sensitivity of           search scientists and experienced engineers that lead on-
+their work. Another concern is bias from a participant’s role in the              device ML initiatives, develop new compression techniques,
+domain [14], as well as the power dynamics between interviewer                    and consult on machine learning optimization efforts. Given
+and interviewees [56]. This study was conducted solely within                     the amount of experience these people have, they often man-
+one organization, therefore practitioners may hold organization-                  age or lead teams. Example: An ML research scientist who has
+specific beliefs and practices [90]. Despite our conscious efforts                a PhD in model compression and is developing novel techniques
+to recruit across ML application domains, we noticed a skew to-                   for model optimization.
+wards vision-based applications on images, video, and 3D scene
+                                                                                • Machine Learning Practitioners (P1–P11 in Table 1): ML
+data. While interviews were conducted prior to the public rise of
+                                                                                  engineers and data scientists that build and deploy models
+LLMs in late 2022 [74], many participants had NLP optimization
+                                                                                  on-device where certain optimization budgets must be met.
+experience, and as discussed in Section 2.3.2, the same overall ap-
+                                                                                  These people use compression as a means to an end rather
+proaches for efficient machine learning are currently being applied
+                                                                                  than solely studying efficient machine learning. Example:
+to LLMs and other foundation model modalities.
+                                                                                  An ML engineer optimizing a model’s size to shrink it to 1MB
+    Taking these limitations together, we caution readers to not
+                                                                                  while maintaining high accuracy.
+consider the advice we detail from participants universally gen-
+eralizable. However it is with confidence that we share the rich                • Tooling Engineers (T1–T6 in Table 1): Engineers and
+pragmatic guidance these 30 experts have to offer.                                developers that focus on building frameworks, infrastructure,
+                                                                                  and tools for efficient machine learning. Example: A software
+5     STUDY RESULTS                                                               engineer building and maintaining an organization-wide tool
+To answer our primary research question RQ: How should a                          to help others compute efficiency metrics.
+broader audience of HCI and ML practitioners today opti-                     Comparing the personas, we see clear differences between appli-
+mize powerful models to design on-device, ML user experi-                 cations. For example, compression experts are heavily (and nearly
+ences?, we first profile who is working in model compression today,       exclusively) focused on research, ML practitioners work across the
+as emerged from our participant pool (Section 5.1), and give a high-      most diverse set of domains (e.g., vision, NLP, sensing, multi-modal
+level state of efficient machine learning in practice (Section 5.2). We   models, fairness, and hardware), and tooling engineers focus on
+then break down our results along a typical AI/ML development pro-        internal tools and compression algorithm implementation. Through-
+cess [1, 5, 29, 113], and use the machine learning workflow outlined      out the paper, we label representative quotes from participants by
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                             Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+Table 1: A summary of the 30 participants from the interview study. Participants are grouped by three emergent personas:
+Compression Experts (E), ML Practitioners (P), and Toolkit Engineers (T). Participants indicated the number of years they have
+spent working on machine learning (light blue squares), and of those years how many have been spent working on model
+compression and optimization specifically (dark blue squares).
+
+                    ID      Experience (Compression / ML Years)         Job Title (Manager ✓)      ML Application
+
+                    Compression Expert
+
+                    E1      10/12                                       ML Manager (✓)             Efficient ML research
+                    E2       7/12                                       ML Manager (✓)             3D computer vision
+                    E3       5/12                                       ML Manager (✓)             Efficient ML research
+                    E4       5/10                                       ML Engineer (✓)            3D computer vision
+                    E5        9/9                                       Research Scientist         Efficient ML research
+                    E6        6/8                                       ML Engineer (✓)            Efficient computer vision
+                    E7        5/8                                       ML Engineer (✓)            3D computer vision
+                    E8        2/8                                       ML Manager (✓)             Efficient ML research
+                    E9        5/6                                       ML Engineer (✓)            Efficient computer vision
+                    E10       5/6                                       Research Scientist         Efficient ML research
+                    E11       5/5                                       ML Engineer                Efficient ML research
+                    E12       5/5                                       Research Scientist         3D computer vision
+                    E13       3/5                                       ML Engineer                3D computer vision
+
+                    ML Practitioner
+
+                    P1       6/10                                       ML Manager (✓)             Efficient computer vision
+                    P2       4/10                                       ML Engineer                Machine translation
+                    P3       3/10                                       Research Scientist (✓)     ML sensing
+                    P4        4/9                                       ML Engineer                Machine translation
+                    P5        5/8                                       Software Engineer          Computer vision
+                    P6        1/6                                       ML Engineer                Multi-modal ML
+                    P7        1/6                                       ML Engineer                Multi-modal ML
+                    P8        2/5                                       ML Engineer                ML fairness
+                    P9        3/4                                       ML Engineer                ML hardware
+                    P10       3/4                                       ML Engineer                3D computer vision
+                    P11       1/4                                       Software Engineer (✓)      Multi-modal ML
+
+                    Tooling Engineer
+
+                    T1       5/10                                       ML Manager (✓)             Efficient ML tooling
+                    T2        3/6                                       Software Engineer          Efficient ML tooling
+                    T3        2/6                                       Software Engineer          ML fairness
+                    T4        4/4                                       Software Engineer          Efficient ML algorithms
+                    T5        3/3                                       Software Engineer          Efficient ML algorithms
+                    T6        2/2                                       Software Engineer          Efficient ML tooling
+
+
+their personas to illustrate the main findings from the study. The         recall, and others. To many readers, this characterization may sound
+persona labels offer additional context for situating a participant’s      like a job for an automated optimization algorithm. However, a
+background and perspective into the larger discussion.                     crucial finding of our results is that automation is not yet possible,
+                                                                           do to the degree of ML, product design, and human expertise that
+                                                                           goes into creating on-device applications. Experts emphasized there
+5.2     The State of Efficient ML in Practice                              is no single solution, “silver bullet” [E12], “turnkey solution” [E5],
+Creating an efficient machine learning model is a “large design            or “golden recipe” [E7] for successfully building efficient machine
+and constrained optimization problem” [E5], where practitioners            learning models. Partially, this is due to the rapidly moving-target of
+have to weigh decisions between many model performance metrics,            new state-of-the-art model architectures and new ML applications
+such as model storage size, inference latency, power usage, device         that may require a custom approach.
+temperature, and model behavioral metrics such accuracy, precision,
+Model Compression in Practice                                                                              CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+
+
+
+                Architecture
+
+                                                              Model Size
+                                                                           features. Efficiency is a deciding point on which features get ap-
+                   Search                    Compression
+                                                                           proved to ship to users, so efficient ML enables user experiences
+                                                                           that otherwise simply could not exist [T5, P3, E12, P2, E9].
+   Model A
+                                Model B
+                                                              Model C
+
+
+                                                                                  “Who cares if we can detect X if your model takes too
+                                                                                   much space? It will never make it to engineering re-
+Figure 1: Practitioners start with a feasibility model (A),                        quirements.” — P3
+which is a model of any size that demonstrates that the ML                     As an umbrella term, efficiency encompasses many metrics. Com-
+task works. Next, an architecture search looks for a smaller               mon metrics that practitioners linked to user experience are sum-
+model that is equivalent to (A) and suitable for devices (B).              marized in Table 2. Some may be familiar with metrics commonly
+A team decides a budget based on how much more efficient                   considered in ML workflows, such as latency and model storage
+model (B) must be to deploy. Practitioners use techniques to               size. Other metrics may come as more foreign to an ML engineer
+compress their model (B) to reach the budget (C).                          accustomed to deploying their model server-side, e.g., device tem-
+                                                                           perature. When a user is holding and carrying around a device all
+                                                                           day, metrics like heat and battery life impact are crucial.
+       “[Compression] works super well sometimes, but some-                    The prioritization of efficiency metrics depends on the model
+       times totally fails. Each project is too dependent, recipes         type and its intended usage. While different practitioners we spoke
+       tend to only work in some situations.” — P2, P6, P7                 to were focused on optimizing different aspects of efficiency, they
+                                                                           all had a shared concept of a model budget.
+   The expertise for creating efficient ML models is currently held
+by a relatively small subset of ML practitioners, where “knowledge
+                                                                           5.4    Deciding Model Budget
+is handed-down from the few who know how to do it successfully,”
+[E3]. These people are referred to as artisans and “based on earlier       A model budget encompasses thresholds for speed, accuracy, size, or
+experience, know it’s possible” [P10] to create highly efficient models.   the amount of any specific resource a model is allowed to consume.
+Reducing a model’s size by half, or by an order of magnitude, takes        Model budgets are created individually per model, and are based as
+additional time and considerations [E7]. “It’s like black magic or         much in product and UX design as they are in device constraints.
+the dark arts, but you will get better with time,” [E7]. Readers may       5.4.1 Budgeting by Technical Feasibility. For new and novel ML
+recognize the “dark arts” or “artisan” language from earlier days of       applications, it is simply unknown on the onset how computational
+contemporary ML [40, 80], before any real widespread knowledge             intensive a model might be. Practitioners refer to reported metrics
+base was established. We hope these study results support growing          from related ML research and an organization’s other models to
+such a knowledge-base for efficient machine learning, and it’s role        sketch out an initial budget:
+within a holistic ML process:
+                                                                                  “At the beginning, [we do a] ‘back of envelope calcula-
+       “[Efficient ML] means a lot of things to different people.                  tion’ where things need to be as honest as possible to
+       Specific techniques on models weights help reduce size,                     what’s realistic. At the beginning, you’re more focused
+       but to get an efficient model comes from more careful de-                   on accuracy. Over time there is refinement.” — E7
+       sign of the loss function, the system, which parts should              A common refinement practice is outlined in Figure 1. First, ML
+       and should not be modeled with ML.” — E5                            engineers will work on a “feasibility” model simply to see if the ML
+   In practice, building efficient ML models describes the process of      task “is possible at all” [P3]. Once the feasibility model works at
+either building a new model from scratch or modifying an existing          sufficient accuracy (Figure 1A), engineers work on an architecture
+model to shrink it enough to fit performance constraints, such             search to find a smaller, more efficient model that achieves the
+as model size, latency, power consumption, and even heat [P3].             accuracy goal (Figure 1B) [P3, E7]. Next, the budget is refined based
+Newcomers often gravitate towards the latest model compression             on the potential to shrink the model using compression: “given
+techniques from literature as a first-step, while experts who consult      [an] accuracy goal, what is the biggest percentage reduction possible?”
+on these projects encourage taking a step back to consider the entire      [E11]. Some teams do this reduction estimation on their own, while
+data and model lifecycle: “Don’t do [model compression] blindly.           others bring in ML compression experts [T5]. Since the compressed-
+Don’t do [model compression] in a rush,” [T1]. “Philosophically, [you]     model budget (Figure 1C) is often estimated before engineers embark
+need to look at whole problem, not as an afterthought,” [E3].              on model compression, the budget remains open to refinement,
+   In addition to barriers of overall experience, efficient ML work        subject to product design constraints. Ultimately, if an ML-powered
+differs perhaps most significantly in how much it requires a deep          feature requires a strict model budget, the model will not ship until
+understanding of hardware details. Low-level hardware details are          engineers have found a way to reach those thresholds [P3].
+not something that typical ML or software engineering usually
+                                                                           5.4.2 Budgeting by User’s Experience of a Model. Many aspects of
+needs to consider. “[ML engineers] feel a bit intimated, and people
+                                                                           budgeting come directly out of product feature design for where,
+don’t feel like they understand this stuff well,” [T2].
+                                                                           when, and how often a model will be running.
+5.3     The Metrics of Efficient, On-Device Models                                 One-Time, Real-Time, or All the Time? Latency budget is
+For many practitioners we spoke to, efficient machine learning is          typically a per-feature UX decision dependent upon how a user
+of immediate importance to their work in developing new product            perceives the model output and how often the model needs to run.
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                                    Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+                                Table 2: Key aspects of on-device ML efficiency that impact user experience.
+
+  User Perceivable Metrics                    Negative User Impact
+       Model storage size                     Modern deep learning models can easily grow to gigabytes. Devices have finite storage, so a model
+                                              must not occupy so much space that it interferes with a user storing their own content.
+       Power usage                            Users expect their devices to have long battery lives, but a resource-intensive model can quickly
+                                              drain a battery. Addressing battery drain is particularly challenging for older devices with lower
+                                              battery capacity and health.
+       Device temperature                     ML models that consume lots of computational power at once can heat up a user’s device to where
+                                              it is uncomfortably warm to the touch. Heat can also trigger thermal throttling, where the device
+                                              slows down to avoid over-heating.
+       Inference latency                      Taking a long time to run inference can be frustrating for a user waiting on the result, and can
+                                              make the experience feel unresponsive.
+       FPS (frames per second)                A special case of inference latency. When processing live inputs (e.g., video), this latency can create
+                                              delays that makes the output appear choppy or unresponsive.
+  All metrics: model tested during high       Resources are shared. A user’s device may be running many things simultaneously, including
+  device resource load                        multiple ML models. A single model that demands too many resources will slow everything down.
+
+
+For example, in a photography app when tagging people in a new                   are intensive computational tasks that can be disruptive to normal
+photo, a model needs to work fast enough so that users do not notice             device function, thus it is conventional to wait until a user is not
+a delay. Models on-device remove the wait on network response                    actively using their device to initiate. By the same logic, scheduling
+times, which make these latency budgets easier to achieve [P2].                  a model to run overnight is a good option if the model’s output is
+   Models that only need to run once generally have a looser re-                 not something needed immediately. If a user’s device is plugged in,
+source budget than continuous models. For models running in                      this also alleviates the concern of a model draining battery. Disrup-
+real-time, only a few milliseconds per inference may be the maxi-                tion to the user is minimized, so models running overnight are also
+mum budget [P1]. This is most crucial in real-time scenarios where               free to take a longer time with a bigger resource budget [E13, P3].
+the user can perceive the model working, such as in live video
+applications [E13]. A user will notice if their video feed appears
+                                                                                    Strategy #1: First estimate the accuracy and latency of the
+choppy or a background filter appears delayed. For this reason,
+                                                                                    original model architecture you want to run on-device. Then
+latency budgets need to be as low as possible. Similarly, strict la-
+                                                                                    estimate how often the model needs to run (less often is “eas-
+tency budgets are given to models that need to run all the time, i.e.,
+                                                                                    ier”) and what it needs to deliver (less accurate is “easier”)
+“always-on”. Always-on models are continuously using the device’s
+                                                                                    to budget the worst-case performance that will be acceptable
+resources, so they are required to be as quick and lightweight as
+                                                                                    for your user experience. The gap between your starting es-
+possible. Some always-on models require a timely response to the
+                                                                                    timate and worst-case budget will tell you how feasible your
+user, for example, an always-on model that listens for a user to
+                                                                                    on-device ML plan is.
+trigger a voice-assistant.
+
+        User Opt-In or Background Task? There are some applica-
+tions where ML is the primary enabling technology, such as voice                 5.4.3 Top-down Budget by Application & Device. As illustrated in
+assistants or language translation apps. If a user explicitly takes              Figure 2, an application or device has finite resources—and ML
+action to trigger a model, the user is in control of when the model              models are only one component of a system. For this reason, major
+runs (or does not run). Product designers will allow models a larger             budget allocation is typically decided by people with far reaching
+budget for power and compute resources when a user explicitly                    views and ownership in an organization [E1, P1, T1, P9]:
+opts-in [E11, E7, P2]. It is also common to have supporting models
+                                                                                        “ [The product lead] looks at budget for whole feature
+running in the background. Similar to any other background task,
+                                                                                        and allocates budget to individual models from there.
+these models require a strict budget to stay unobtrusive:
+                                                                                        There are dozens of algorithms. [Each model] gets bud-
+       “If the user will never perceive the model, we still want                        get based on priority, practicality, and executive deci-
+       the memory footprint to be inconspicuous so it doesn’t                           sions on what is the most important algorithms to give
+       interfere with them using their device.” — E7                                    space/time to.” — T1
+         Can it Wait for a User to Sleep? Many devices today will                   The difficulty of hitting budget can vary enormously depend-
+download and install routine updates at night, or whenever the de-               ing on the model. Thus, negotiation over budget allocations can
+vice’s user sleeps and has their device connected to power. Updates              continue and evolve until late in development [P1].
+Model Compression in Practice                                                                            CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+
+
+Application Budget                                      9.41 MB Total
+                                                                            Strategy #2: Budget a model’s resources by it’s value-add
+                                                                            to your overall experience. For a reliable estimate, run your
+            All Other Features    ML Models                                 model on the actual target devices early and often during
+                                                                            model optimization. Measure compute usage, memory pres-
+Figure 2: Models needs to share space with the rest of an                   sure, battery consumption, heat, and your model’s storage size
+application. Model budget typically reflects how “valuable”                 relative to the overall application. Run the model alone and in
+a model is compared to all other features of the application.               realistic, high-load scenarios where many process are running
+The above hypothetical example shows how much budget a                      simultaneously to find out if your model is too resource greedy.
+model (blue) has in the overall system.                                     Remember to not be a bad citizen: an ML feature that does not
+                                                                            respect the resource needs of the overall device will result in
+                                                                            a poor user experience.
+        Size Budget. Any one application should not take up too
+much disk space on a device. The challenge is that as more and
+more new features make use of ML, there are more models to fit in         5.4.4 Edge, IoT, and Low-power Devices. Devices like laptops, tablets,
+the same amount of storage:                                               and mobile phones have far more memory and power resources
+      “Because of [neural networks], and the rising popular-              than smaller, low-power “edge” devices, such as wearables or IoT
+      ity of huge transformer models, compression becomes                 devices. For edge devices, budget is tight enough that even the bytes
+      more and more important.” — E9                                      of the modeling code text itself can matter [E11]. For these devices,
+                                                                          an expert recommended avoiding neural networks all together due
+        Power Budget. A model’s power budget is a measure of              to their high cost, and approximate the same accuracy as much as
+how much battery it is permitted to use. Power consumption of a           possible using the lowest profile conventional machine learning
+model can be tricky to estimate, and should be measured empirically       algorithms, such as decision trees [E11].
+on the target device for the most reliable estimate [E6, T4, P9].
+Once again, real-time or always-on models require much stricter           5.4.5 Gating & Variable-Budget Options. There may be features
+power budgets, because they continuously draw power. Instead of           where it is not (yet) technically possible to fit the ML component
+measuring power at one moment of execution, these continuous              entirely on device. One option is gating, where only some inference
+models can be thought of in terms of the total percentage or total        is done on-device: a small simplified model lives on-device and is
+minutes of battery they consume in a day [E6, P3, E7].                    only highly accurate for common inputs. If the small model detects
+                                                                          complex or uncertain inputs, it invokes a high-powered ML model
+          Heat Budget. Closely related to power consumption is de-        that uses more resources, or it sends the harder input to an external
+vice temperature. In the words of E7: “ship high-quality ML models        model on a server (see background Section 3.6.2) [E11].
+that don’t melt the user’s device.” By melting, E7 refers to both a de-       Another option is variable budgeting. Product teams may be
+vice that is uncomfortably warm to the touch, and a device that has       able to keep essential parts of a feature running smoothly under
+been forced into thermal mitigation. Thermal mitigation, or ther-         intermittent network availability by dynamically changing whether
+mal throttling, is when a device slows down processing to protect         it uses higher-accuracy models or lower-accuracy models. Similarly,
+itself from overheating. Hot and slow devices makes for a terrible        product teams can also choose to lower ML accuracy when needed
+user experience that should be avoided. Thus, memory and power            to keep a feature running under high-device memory load:
+budgets must be set according to thermal measurements [E6, E7,                  “So people think about model compression as static re-
+E4, E1, E2]: “Heat throttling is everyone’s budget!” [E4].                      sources, but the actual resources on device are dynamic
+   Multiple Models in Concert. A development team may measure                   based on what’s running. So it’s useful to on-the-fly
+the power, latency, or memory load of a single model as they de-                change how much resources your model uses.” — E10
+velop it, but testing a single model in isolation is insufficient in         For any model, there will be some size and efficiency budget at
+situations where multiple models are powering an app or expe-             which the model can be shrunk without any noticeable difference to
+rience at the same time [E6, E13, E10]. Multiple models running           the user. Below that threshold, accuracy degradation may negatively
+simultaneously will affect the overall memory pressure experienced        impact UX. A budget must balance the best model accuracy with
+by device at any moment, and thus the latency of each model as            the lowest possible resource footprint.
+well as total power consumption. For these situations, teams need
+to experimentally test models running in concert to get accurate            Strategy #3: On-device ML does not need to be all-or-nothing.
+measures of total consumption, and experimentally refine their              If current compression techniques cannot fit your ML feature
+budget for each individual model from there [E13, E10]:                     on-device, try breaking the feature down into subtasks. Del-
+       “You could use too much memory, and that’s a no-go. You              egate smaller subtask models to live on-device and delegate
+       don’t know that until you test on device. [The memory                larger ML workloads to a server if appropriate. Prioritize on-
+       bound] is not something you can compute ahead. There                 device ML for feature subtasks that will help preserve your
+       are multiple models happening at once, so until they are             user’s privacy and keep critical functionality responsive in the
+       all put together you can’t see exactly what the memory               absence of a network connection.
+       is going to be on a process.” — E13
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                             Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+5.5     Applying Compression during Development                            mobile phones, smartwatches, tablets, computers, and others. Con-
+Participants strongly emphasized that applying model compression           sider a practitioner building a model for a smartphone. There are
+is an investment. Compression techniques can take intensive engi-          many types of smartphones, and versions of existing smartphones
+neering effort to apply—and may fail. There are many circumstances         each with their own memory and compute details. Hardware also
+that can cause one compression technique to generate enormous              changes over time, and practitioners may need to consider older
+savings in one model, and completely fail to produce any savings           versions of hardware that have already been shipped. In the same
+in a different model, potentially after weeks of wasted engineering        way that front-end developers build responsive UIs and applications
+effort. While this work is not an exact science, we detail general tips    for multiple screensizes, so too do ML practitioners now need to
+and guidance from practitioners. Note that most of these techniques        optimize and test multiple hardware implementations specific to a
+assume the model to compress is a neural network.                          set of devices [E6].
+
+5.5.1 Maximize Architecture Savings First. As shown in Figure 1,             Strategy #4: If starting from scratch, chose a model architec-
+practitioners often start optimizing a model by finding a smaller            ture specifically designed for mobile devices, but be aware
+architecture first. “If you’re running a common ResNet, look at strides,     that an architecture may not perform as-advertised due to
+layer widths, and the number of layers” [T5]. Participants also rec-         implementation differences in hardware. It is crucial to pro-
+ommended neural architectures designed specifically for device               file models on your physical target hardware—and for every
+efficiency [E13, P5, E3, E11, T6], such as MobileNet [47]. Some ap-          hardware version you aim to support. Older devices usually
+plications do not need a heavy neural network; instead it might be           have fewer compute resources for your model.
+possible, and even beneficial, to convert into a simpler decision tree
+or SVM [P3]. Architecture savings are seen as a more reliable first
+approach before attempting compression [E13, E1]:                          5.5.4 Determine if a Model is Memory Bound or Compute Bound.
+       “If you’re trying to reduce the size, model compression is          Another useful strategy is to consider ahead which metrics are
+       effective, but more like a last resort. If you have a model         likely to be the biggest issue for a model type [T5]. A model is
+       that is just overkill, [compression] can shave off 20-40%,          memory bound if the size of the model or the size of the data is the
+       but just changing architecture to something smaller will            biggest issue. A model is compute bound if the speed/latency of the
+       have way bigger impact.” — E11                                      model is the biggest issue. For instance, “Computer vision tends to
+                                                                           be memory bound and not compute bound. It’s fast but the data sizes
+   Due to the high training cost of some models, participants dis-         are massive” [T5]. Participants also suggest going layer-by-layer to
+cussed manual architecture selection (as opposed to auto-ML solu-          identify bottlenecks since individual layers can be either memory
+tions that automate various stages of ML development) based on             or compute bound individually [E2].
+their expertise: “It’s really trial and error by hand monitoring the          If memory-bound, architecture changes, sparsity techniques,
+hardware usage [and] identifying bottlenecks,” [E2].                       or palettization techniques can help reduce model size. On-disk
+5.5.2 Check the Architecture Against the Hardware. A critical caveat       size is considered the easiest memory savings to get from model
+to architecture optimization is that it is easy to be fooled. A common     compression [E13]. If data transfer size is causing the memory is-
+mistake is to trust in the reproducibility of academic results: “Don’t     sue, reducing data resolution for model processing can help, e.g.,
+expect what is “efficient” in a paper to exactly work in practice,”        reducing video data from 1080p to 720p [E8]. If compute-bound,
+[E7]. The issue is that at the lowest level of computation, different      techniques like quantization can help speed up and simplify com-
+hardware optimizes for different operations. Reported efficiency           plex matrix math. Quantization can also save memory since smaller
+measures are only reliable for the specific hardware set they were         numbers help keep computation in cache memory [E12]. Cache
+run on. Even for specialized accelerator hardware designed for ML,         locality is a common latency bottleneck to check [E6, E12], that
+the hardware will likely only support certain types of operations.         also helps with power problems:
+Since hardware cannot be altered at the same pace as software, the                “Latency is easier than power to improve. You can check
+latest neural layer architectures from papers may not be possible                  cache locality, moving data takes a lot of power so that’s
+to run efficiently on-device. Practitioners emphasized the need to                 a big one to check.” — [E6]
+adapt their neural architecture to better fit hardware [T5, E7, P9].
+                                                                           5.5.5 Accuracy v. Effort Trade-Off. Practitioners we spoke with
+5.5.3 Test Against a Range of Hardware. In conventional machine            had a sense of “accuracy v. effort” [E6] or “risk v. reward” [E13] for
+learning work, and more generally much of modern software engi-            some of the most common compression approaches. As a general
+neering, it is not required to know the details of the hardware that       heuristic, compression techniques that need little-to-no retraining
+code will run on. In efficient machine learning, hardware may be           will be cheaper to apply—but at the cost of steeper model accuracy
+one of the greatest challenges when working in on-device ML:               degradation. Since some of these models take days, or more, to
+       “You must consider different layers of abstraction of               train, involving complex compression logic in the training process
+       a model from code to hardware. This can be hard for                 is costly. Practitioners must consider cost in money, time, and effort
+       developers to understand.” — E6                                     that implementing a specific compression technique could take.
+   To further complicate matters, often practitioners are not con-            ($) Post-training Quantization. Quantizing a model’s weights
+sidering a single specific hardware implementation, but rather a           after the model has been trained was widely considered the first
+class of hardware. Classes of hardware include platforms such as           go-to compression technique for many applications.
+Model Compression in Practice                                                                             CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+
+
+       “So quantization is a big one. You can usually quan-               first initialize the ML model architecture with random weights,
+       tize to 8-bit integers without losing accuracy. This isn’t         then quantize, and test the model’s speed and size on-device. Even
+       always the case. You do need to be careful where you               a coarse estimate may be worth getting a sense of the magnitude
+       apply quantization. But generally it’s a pretty generic            of savings from quantization [E13]:
+       technique across different hardware. You can usually                     “[It] gives you a sense of how much quantization is going
+       cut from fp32 to fp16 and can get speed up by going                      to help at all before you go through expensive training
+       to integers.” — E4                                                       process.” — T5
+   Since weight quantization can be done without additional train-          If post-training techniques produce results that are too far from
+ing, it is considered cheap. 10/30 participants discussed using this      budget goals, teams can then pivot to training-aware approaches.
+approach [E6, P8, E9, T3, T5, T1, E13, E7, T2, T2]. Although post-
+training quantization is considered “easy” [E9] as far as ML com-
+                                                                            Strategy #5: Before you heavily invest in a particular com-
+pression techniques go, practitioners emphasized that it still often
+                                                                            pression technique, start with a cheap estimate of how much
+takes complex code to implement and there are many algorithm
+                                                                            savings you might expect to gain. For example, initialize a
+variations [32] to experiment with [T5]. For models that need high
+                                                                            mobile-friendly architecture with random weights, then quan-
+accuracy, post-training quantization may not be enough to hit bud-
+                                                                            tize it. Profile this “stand-in” compressed model on-device and
+get without unacceptable accuracy degradation [E9, E4, E13, E5].
+                                                                            compare its efficiency to your budget. If it meets budget, then
+   ($$) Compression with Fine Tuning. When model accuracy goes              quantization may be enough. If it is far off budget (such is the
+down after quantization or pruning, fine tuning can help recover            case with many real-time computer vision models), consider
+the loss [32, 41]. Fine tuning a model costs training time, but is nec-     more intensive training-aware compression techniques.
+essary in many situations to recover accuracy. Pruning techniques
+almost always require fine-tuning on the pruned model [41]. 6/30
+participants discussed successfully utilizing this approach [P8, T3,      5.6    Evaluating Compressed Models: Efficiency,
+T1, E8, E13, E10].                                                               Accuracy, and Artifacts
+   ($$$+) Compression-aware Training. Though it introduces ad-            The goal of model compression is to reduce a model’s size while
+ditional complexity to model training, compression can be ap-             preserving its accuracy, or what some refer to as “acceptable accu-
+proached as yet another optimization that a model needs to learn          racy degradation” [E8]. In general, past a certain point, shrinking
+during training. 11/30 participants discussed having experience           a model will likely degrade its accuracy. Conversely, in literature
+with quantization learned during training [E6, E9, T5, E3, E5, E7,        there are examples showing that compression can actually improve
+E10, E1, E12, T2, P10]. This approach is generally considered best-in-    accuracy, by acting as a model regularizer and forcing the model to
+class and often required when designing always-on ML experiences          generalize better [55, 100]. This phenomenon is sometimes referred
+that require low latency, e.g., real-time computational photography       to as Occam’s Hill [41]: as light compression is applied, there can be
+models. Practitioners recommended training-aware compression              an slight accuracy bump as the model is forced to generalize; how-
+when a model needs to be compressed significantly to meet budget          ever, as one increases the compression strength the model becomes
+while keeping high accuracy:                                              too general to properly work and accuracy quickly drops. While
+       “If you want to go to lower bit quantization, such as              these results have been observed on academic benchmarks, practi-
+       4 or below, it’s almost impossible to use post-training            tioners said that their models tend to generalize quite well already,
+       quantization because the difference in accuracy gets               so most often they see little improvement from the regularizer ef-
+       way too big. So for this level of compression you need             fect of compression [E8, E1]. Thus, we focus this discussion on the
+       to do training-aware compression.” — E9                            much more common scenario where practitioners must wrestle
+                                                                          with accuracy degradation.
+   Some practitioners had less experience with learned sparsity
+techniques and called them “high risk, high reward” [E13] because         5.6.1 The Trade-off Curve Visualization. To empirically compare
+they are much harder to control compared to post-training sparsity        multiple compressed models and select the one that satisfies bud-
+techniques. Although training-aware compression is considered             get requirements, practitioners typically plot a model behavioral
+the best form of optimization [32], a major drawback is that is           metric (e.g., accuracy) on the y-axis against any performance met-
+must be included in initial model training: “Not starting early with      ric (e.g., model size, model latency, or power consumption) on the
+compression is a dead end,” [E3].                                         x-axis [102, 103]. This is illustrated in Figure 3. Each dot represents
+   Practitioners use their experience and early testing to judge          a model architecture and compression pair. These charts are called
+how much compression a model will need. For example, large vi-            multiple names throughout different teams, including the trade-off
+sion models may start far exceeding their size and power budgets,         curve, the accuracy Pareto curve, or the tuning curve.
+and require heavy compression to meet budget. In these scenar-               P3 described a scenario when optimizing over 6,000 small models.
+ios, training-aware compression is likely necessary, which requires       In their application, the ML model was already on the order of kilo-
+planning ahead: “It has to be done from day 0, not day 100,” [E7].        bytes; therefore, they could retrain many new models quickly. Com-
+   For other applications, practitioners suggest estimating how           paring thousands of models in parallel, they plotted the F1-score on
+much compression will be feasible with simple post-training quan-         the y-axis against the model size on the x-axis. This arrangement
+tization. To estimate quantization savings before training a model,       formed the usual curve. Teams then filtered out models that do not
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                            Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+Accuracy (%)                                                                 Many teams do extensive model evaluation, error, and failure
+100                                                                       analysis [T2, E12, P11, P6, P7, E10, T4]. “We cannot assume compres-
+ 75                                                                       sion doesn’t change model behavior, so we look at confusion matrices
+                                                                          and instances where the model gets it wrong” [E12]. In one project
+ 50                                                                       that P11, P6, and P7 worked on where small mistakes could lead to
+ 25                                                                       a poor user experience, they built “unit tests” for different curated
+                                                                          testing sets to monitor accuracy over time. E6 also emphasized
+   0                                                                      using data unit tests to observe how single instances move through
+       0    1    2   3          4      5      0   2     4  6     8   10   a model to both understand how much computational change oc-
+        Latency (ms)                           Power consumption (mw)     curs after compression and make the necessary adjustments to the
+                                                                          model code. “Data so influential to hitting accuracy targets” [E3].
+Figure 3: A common chart used for model comparison and
+selection, where the y-axis is a model behavioral metric (e.g.,             Strategy #6: Compression can degrade the accuracy of a
+accuracy) and the x-axis is any number of performance met-                  model and change its behavior in unpredictable ways. It is
+rics (e.g., latency or power consumption). Each blue dot rep-               essential to create a robust evaluation pipeline (e.g., defin-
+resents one model trained with different architectures or                   ing metrics, curating test sets) before you start optimizing
+compression schemes, and the red line indicates the accu-                   your model, so that you can reliably observe shifts in model
+racy budget threshold. Practitioners look for the “knee in the              error afterwards. To prevent degradation from a failed opti-
+curve” across charts: choosing a model above the accuracy                   mization, compare optimized models with varying amounts
+threshold that minimizes latency and power consumption.                     of compression to your original model, inspecting the metrics,
+In these charts, the selected model is colored red.                         subpopulation behaviors, and internals, such as weights and
+                                                                            activations, to ensure they are within expected ranges.
+
+satisfy their budgets, and ultimately selected a single model in the      5.6.4 Model Compression Artifacts. As with other types of media,
+“knee” of the curve that has the best balance between what metrics        such as image, audio, and video data, if too much compression is
+they care about (e.g., Pareto optimal).                                   applied it can produce compression artifacts: noticeable distortions
+                                                                          in the media (Figure 4). For example, compressing an image too
+5.6.2 Compounding Changes Degrade Accuracy. A common chal-                much can produce blurry and blocky shapes over the subject matter;
+lenge with maintaining accuracy is that model compression tech-           compressing audio can change the sound quality and waveform
+niques can compound in unintended ways. In some scenarios, small          of the music. Multiple participants describe scenarios where their
+optimizations throughout a model build on one another, so by the          model had artifacts, although they did not borrow this language
+time a data input reaches the end of a network, its prediction is to-     from other types of media:
+tally off. In ML, this phenomenon is similar to the concept of explod-
+                                                                                  “Compressing like 90% can make things unstable with
+ing/vanishing gradients [11, 78]. The effect of this compounding
+                                                                                  strange side effects. It’s hard to figure out when you
+error is not obvious to spot in beginning [E9]. For instance:
+                                                                                  compress too much.” — E13
+        “When you have addition that takes two quantized val-                It is tempting to think of accuracy degradation as the only ML
+        ues to a quantized output, it’s not easy to check that the        artifact; however, there are more subtle, even sinister implications
+        range of the inputs are the same as the output ranges.            depending on what a model is used for. For example, where some
+        You tend to lose resolution in the output where one               subpopulation of data is underrepresented in a dataset, e.g., at the
+        branch dominates the range, and you lose the range                tail of a distribution, it could be that ML compression techniques
+        of the lesser branch. You need additional care to check           remove this tail, amplifying existing biases. Examples of this have
+        that they have the same range tracking during the for-            been observed empirically in the few publications investigating
+        ward quantization pass.” — E6                                     robustness and evaluation of compressed models [31, 44, 45, 63, 77].
+  For quantization, practitioners advise a “gut check” to ensure the         One specific compression artifact example story was told from
+quantized weights and activations match the ranges of the original        multiple participants. In the case of an object detection model that
+model, or else accuracy will degrade [E6].                                needed to run at a high frame rate, during development teams no-
+                                                                          ticed one day that the bounding boxes were jittering in their demo.
+5.6.3 Robust, End-to-end Data Evaluation. Since the amount of             This finding was surprising, since the metrics from their most re-
+success in model optimization varies significantly by architecture        cent model iteration were reporting no changes, but “there were
+and task, “without a clear evaluation strategy you won’t know if          some weird side-effects” [T5]. It was not until someone debugging
+you’re making things better or worse,” [E11]. Some ML-powered             the problem realized that they had applied quantization through-
+experiences are composed of multiple models working together.             out the neural network, including the final prediction layer. This
+Participants said they first test models individually to ensure they      coarsening of the data at the output produced correct bounding
+work standalone, then evaluate the multi-model systems to test            boxes, but resulted in a poor user experience. Another participant
+compound effects [E10]. Practitioners said the curve visualizations       had seen this before, and remarked if the output of a model is “‘fine
+(Figure 3) are often the output of evaluation pipelines.                  grain,’ don’t quantize” [T1].
+Model Compression in Practice                                                                                CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+
+
+                                                                           prediction and confidence, to help find edge cases and drill into
+                 Images            Audio               ML Model
+                                                                           specific errors that metrics may or may not capture [P11, P6, P7].
+    Original
+
+
+
+
+                                                                               Strategy #7: Despite all the effort to create criteria and metrics
+                                                                               to quantitatively measure and benchmark your model, your
+                                                                               evaluation pipeline may not capture every aspect of your
+                                                                               model’s performance and behavior. Even if your model passes
+                                                                               evaluation, move it on-device, in the intended environment
+                                                                               in which it will run, and get it in the hands of users to demo.
+                                                                               There is no other way to capture the feel of an ML-powered
+                                                                               user experience.
+    Compressed
+
+
+
+
+                                                          ?
+                                                                           6     DESIGN OPPORTUNITIES FOR EFFICIENT
+                                                                                 ML TOOLS AND INTERFACES
+                                                                           Given the unique challenges to efficient on-device ML, where can
+                                                                           human-centered ML researchers, practitioners, and designers start
+Figure 4: Illustrative examples of compression artifacts in
+                                                                           to engage? As efficient machine learning techniques are driven for-
+images and audio, but what do machine learning model arti-
+                                                                           ward by advances in hardware engineering and ML research, there
+facts look like and how do we identify them?
+                                                                           remains a major barrier in practically applying these techniques
+                                                                           for real-world features and user experiences.
+   Generalizing from this example, one learning that teams have               Tools influence what is possible: “there is a gap between what is
+found is that when a model’s prediction needs to be continuous,            possible with machine learning and what [tools] are being used,” [E4].
+smooth, or is user-perceivable at a high frame rate, it is best not to     Currently, the tooling for efficient on-device ML is underdeveloped,
+compress the final output layer [22]. Participants told us that other      “homegrown and ad-hoc,” [E9]. Moreover, current tools focus on
+modeling tasks can be harder to optimize than classification [E5].         individual algorithms (Section 2.3.3) instead of the holistic process:
+“Regression models have been an absolute nightmare to compress” [E7].      “this is a newer area, many tools are specific to a project and tend to
+Anytime the output needs to be a continuous or floating point value,       be prototypes to prove feasibility,” [E9]. As we have demonstrated in
+compression techniques can produce artifacts [E12].                        this paper, there is considerable design planning, experimentation,
+                                                                           and strategy that experts use to make on-device ML a reality. Proper
+5.6.5 Demoing User Experiences. ML-powered experiences can be              tools could help educate practitioners to develop these skills:
+dependent upon multiple models working in concert, and the “best
+way to test compound [model] effects is having end-to-end evalua-                  “Tooling is education products disguised as software.
+tion” [E10]. Another strategy to catch artifacts is testing models                 Better tools make it easy to do correct things and harder
+“as close to the metal as possible,” i.e., loading the models on-device            to do incorrect things.” — T2
+and building demo applications to run outside of lab environments.            We next share interdisciplinary HCI + ML research directions for
+“Since different hardware are not bit-wise accurate, metrics won’t         supporting practitioners. While the space of tooling opportunities
+capture these changes” [E12]. Another practitioner told us “user ex-       is wide and will evolve over time, we provide a few actionable
+perience differences are the really important cases to isolate” [P5]. To   recommendations for future tools and interfaces that are ready for
+find these user experience changes, teams have prioritized building        development today.
+demo applications where different models, e.g., a baseline model
+and a compressed model, can be dynamically toggled back and forth          6.1     Developing Intuition for Compression
+for testing [T4]. Some of these demos toggle between a model run-          Although modern libraries for machine learning make it easier than
+ning on-device and a model running on a server [E12]. Interactive          ever develop models, that does not mean practitioners know how to
+and live demos like these allow for ML teams to get feedback from          best train, evaluate, and deploy models. Machine learning is an in-
+other product stakeholders [E10]. They are particularly helpful for        herently iterative and and empirical practice [7, 80], and developing
+designers to get an overall “feel” of a model: interacting with a          intuition for how models learn and behave is a major competitive
+model in its intended environment to understand its capabilities           advantage over blindly tweaking hyper-parameters. Interactive
+and limitations [T4]:                                                      playgrounds that provide a safe environment where practitioners
+       “Get [the user experience] in the hands of people as fast           can quickly build and test their ideas could be a great onboarding
+        as possible.” — T4                                                 experience for learning about efficient ML and model compression.
+    This notion of the “feel” of a model was described multiple times.     There is already precedent for this within machine learning, where
+If an “ML engineer retrains [the model] and says it’s better, we still     interactive and educational tools help learners develop intuition
+need see if it feels better,” [T4]. To try and attribute the feel of a     around how certain models train and make predictions. Examples
+model to actionable development steps, practitioners show debug-           include include TensorFlow Playground [92] for small neural net-
+ging modes on-device to observe live, real-time charts of a model’s        works, CNN Explainer [109] for convolutional neural networks,
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                            Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+GANLab [52] for generative adversarial models, and Diffusion Ex-          6.3    Finding Model Bottlenecks for Targeted
+plainer [57] for stable diffusion models. These interactives typically           Compression
+run fully in-browser, enabling learners to access and experiment
+                                                                          In Section 5.5.4 and Section 5.6.4, practitioners discuss analyzing
+with ML techniques without installing software to needing access
+                                                                          a model layer-by-layer. Targeted compression is the practice of se-
+to extra compute. Moreover, they have been incorporated into ML
+                                                                          lectively optimizing specific components of a model, for example,
+curricula to help people gain complementary, hands-on experience
+                                                                          individual layers in a neural network. Currently, practitioners de-
+for specifics model categories.
+                                                                          scribed the process as tedious, manual, and time-consuming, where
+    Imagine a playground for efficient ML, where practitioners could
+                                                                          “you must go layer by layer, operation by operation,” [P11, P6, P7].
+learn and build intuition about different compression techniques
+                                                                          There exists a space of interfaces that could help practitioners look
+[E12], model architectures [E7], and their effect on hardware [P9].
+                                                                          inside their models, by mapping metrics to specific layers of a net-
+Perhaps this playground could be web-based, where a small model
+                                                                          work [T5], finding the performance bottlenecks in a network [E5],
+is loaded in the browser running live inference. Users could select
+                                                                          comparing the input and output of these bottleneck layers [E9],
+different compression techniques, with varying degrees of strength,
+                                                                          and selectively optimizing them.
+and see the impact on the model, its metrics, and its predictions. This
+                                                                             Targeted compression tooling may also ease the difficulty of
+could help practitioners define realistic budgets (Section 5.4), test
+                                                                          thinking at the hardware level. E6 gave an example: once an on-
+different combinations of architectures and compression techniques
+                                                                          device model written in Python is compiled onto specialized hard-
+(Section 5.5.1), and inspect the difference between compute-bound
+                                                                          ware, the operations are expressed by what the hardware can sup-
+or memory-bound models (Section 5.5.4).
+                                                                          port, and is likely not as readable as documented Python code. To
+                                                                          complicate matters, low-level hardware operations may not have
+6.2     Comparing Across Compression Schemes                              a one-to-one mapping back to the original Python code, due to
+                                                                          optimizations in the compilation process. Better tools could help
+A common scenario in efficient model development is considering
+                                                                          practitioners perform analytics on their models to find bottlenecks
+the trade-off between accuracy and performance (Section 5.6.1).
+                                                                          and easily traverse between different layers of abstraction (e.g.,
+While conventional ML development requires model comparison
+                                                                          model code and hardware operations).
+between architectures and hyper-parameters, the optimization met-
+rics that practitioners must also navigate add additional complexity
+                                                                          6.4    Evaluating Multi-model ML Systems
+when moving models on-device [T5]. Consider the scenario of hav-
+ing a well-performing model that does not hit a size budget. What         It is often assumed that model evaluation is done on a single model,
+do you do next? You can try every compression technique possi-            isolated in a “lab environment.” In practice, this is not the case. Not
+ble, but how do you ultimately select the best model that balances        only are models integrated into larger apps or codebases, many
+between the desired trade-offs? In a similar process discussed in         modern ML-powered experiences are the result of multiple models
+Section 5.6.3, one practitioner mentioned that they “like to see an       working together. For example, models could be arranged in chains,
+overview of a model’s robustness before and after compression,” [P8].     where the outputs of one model are the inputs of another [E10].
+    Better tooling to support model comparison could help prac-           If you compress one model, how does that impact downstream
+titioners compare a feasibility or baseline model (Section 5.4.1)         models? Recalling the concept of compounding error discussed in
+against different compressed models to select the best model possi-       Section 5.6.2, small errors introduced in earlier models can com-
+ble. There is rich opportunity for future work to investigate what        pound to produce bigger errors by the end of a model chain [E10].
+to visualize and how. For example, flexible interfaces should handle      E3 emphasized this challenge, saying that the future of ML driven
+visualizing the similarities and differences between models, their        user experiences will be accomplished through multi-model sys-
+internals, their outputs, and applied compression techniques, where       tems. When multiple models are running simultaneously, each can
+each technique not only has a suite of hyperparameters but can be         be evaluated individually, but also must be considered as a whole,
+also be combined with one another.                                        which makes it “super hard to reason about,” [E3]. Future tools that
+    This line of work could also draw from existing work in experi-       generalize and can evaluate multi-model machine learning systems
+ment tracking. P10 described a project where the models they were         will have a big impact in helping practitioners build, debug, and
+developing were small, such that they could generate thousands            make sense of large data-driven applications.
+of candidate models. This participant always compared candidates
+against an uncompressed baseline model, and maintained docu-              6.5    Simplified Hardware Testing
+mentation tracking their experimental history, with a few notes per       One recommendation repeated by practitioners in this study was
+model, so that other stakeholders could make an informed model            to measure model performance on device (Section 5.5.2). T4 em-
+selection. However, this required diligent effort by the developer—       phasized that the performance of one model will like differ across
+experimental histories tend to exist across multiple documents and        different hardware (Section 5.5.3). However, testing on real hard-
+can result in long tables of values where patterns can be hard to         ware can be a major barrier. Due the variety of mobile devices and
+discover. Future opportunities for tooling point to model tracking        different versions of hardware, it can be hard to build for multi-
+systems that can generate interactive reports to help practitioners       ple hardware implementations simultaneously. The average ML
+observe their model development history, while helping them select        developer (outside of a hardware company) may not have access to
+the best model (from potentially thousands of models) that passes         all versions of all devices their users might have. When it comes
+their accuracy threshold and maximizes performance.                       to future tooling opportunities, E6 says it best, “the tools need to
+Model Compression in Practice                                                                                   CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+
+
+expose and take care of the cases for different hardware to maximize     model compression have developed from translating ML research
+the hardware efficiency.” While there is undoubtedly room for ML-        into intelligent, on-device ML experiences.
+hardware innovation here, for the purposes of this work assume
+this problem can be reduced to looping over a set of hardware and        ACKNOWLEDGMENTS
+evaluating a model. With all these results, this problem could be        We thank our participants at Apple for generously sharing their
+cast as yet another comparison task, where tool designers need           time and knowledge. We also thank the many colleagues that have
+to enhance existing workflows to allow ML practitioners to track,        given their feedback on the paper. Specifically, we thank Kayur
+organize, and see what hardware passed or failed certain criteria.       Patel who sparked early ideas for this line of research, as well as
+                                                                         Mohammad Rastegari, Sachin Mehta, and Yannick Assogba for their
+6.6     Automating (Some) Compression                                    advisement on this work.
+        Experiments
+While many of the practitioners we interviewed discussed creating        REFERENCES
+efficient models as a human-in-the-loop iteration process, there are       [1] 2018. What is the team data science process? Microsoft (2018). https://learn.
+                                                                               microsoft.com/en-us/azure/architecture/data-science-process/overview
+opportunities to automate applying different compression schemes           [2] 2019. Design for AI. IBM (2019). https://www.ibm.com/design/ai/
+and present results to developers. An apt analogy is what AutoML           [3] 2019. Human interface guidelines: Machine learning. Apple Human Inter-
+is to hyperparameter searching: instead of sequentially trying dif-            face Guidelines (2019). https://developer.apple.com/design/human-interface-
+                                                                               guidelines/technologies/machine-learning/introduction
+ferent compression schemes, perform a grid search and parallelize          [4] 2019. People + AI guidebook. Google (2019). https://pair.withgoogle.com/
+many different tests simultaneously. P3 was particularly excited               guidebook/
+about compression automation. Imagine mixed-initiative tools that          [5] 2023. Machine learning workflow. Google (2023). https://cloud.google.com/ai-
+                                                                               platform/docs/ml-solutions-overview
+take in a model and user-specified budgets, runs through a suite of        [6] Keivan Alizadeh, Iman Mirzadeh, Dmitry Belenko, Karen Khatamifard, Minsik
+compression techniques to find all possible experiments that satisfy           Cho, Carlo C Del Mundo, Mohammad Rastegari, and Mehrdad Farajtabar. 2023.
+                                                                               Llm in a flash: Efficient large language model inference with limited memory.
+the budgets, and finally presents a summary of recommended com-                arXiv preprint arXiv:2312.11514 (2023).
+pression recipes for a practitioner to choose from. Perhaps through        [7] Saleema Amershi, Andrew Begel, Christian Bird, Robert DeLine, Harald Gall, Ece
+tools like these we could even learn something about the behavior              Kamar, Nachiappan Nagappan, Besmira Nushi, and Thomas Zimmermann. 2019.
+                                                                               Software engineering for machine learning: A case study. In 2019 IEEE/ACM
+of compression itself. However, we do not expect the process of                41st International Conference on Software Engineering: Software Engineering in
+creating efficient models to be completely automated. Throughout               Practice. IEEE, 291–300. https://doi.org/10.1109/icse-seip.2019.00042
+our study, experts made it clear that successful model compression         [8] Saleema Amershi, Dan Weld, Mihaela Vorvoreanu, Adam Fourney, Besmira
+                                                                               Nushi, Penny Collisson, Jina Suh, Shamsi Iqbal, Paul N Bennett, Kori Inkpen,
+is an iterative development process (Section 5.2), but leveraging the          et al. 2019. Guidelines for human-AI interaction. In Proceedings of the 2019 CHI
+strengths of automation where appropriate suggests rich opportu-               Conference on Human Factors in Computing Systems. 1–13. https://doi.org/10.
+                                                                               1145/3290605.3300233
+nity for mixed-initiative approaches for creating efficient models.        [9] Apple. 2023. Optimizing models - Core ML Tools overview. https://coremltools.
+                                                                               readme.io/docs
+7     LIMITATIONS & VALIDITY                                              [10] Apple. 2023.       Personalizing a model with on-device updates.           https:
+                                                                               //developer.apple.com/documentation/coreml/model_personalization/
+Optimizing and creating efficient models to run on mobile devices              personalizing_a_model_with_on-device_updates
+is still relatively new, and best practices are evolving alongside the    [11] Yoshua Bengio, Patrice Simard, and Paolo Frasconi. 1994. Learning long-term
+                                                                               dependencies with gradient descent is difficult. IEEE Transactions on Neural
+rapid pace of ML research. Thus we expect not all the practices                Networks 5, 2 (1994), 157–166.
+mentioned in this paper will stand the test of time. As discussed         [12] Umang Bhatt, Alice Xiang, Shubham Sharma, Adrian Weller, Ankur Taly,
+                                                                               Yunhan Jia, Joydeep Ghosh, Ruchir Puri, José MF Moura, and Peter Ecker-
+in Section 4, studying experts from a single organization naturally            sley. 2020. Explainable machine learning in deployment. In Proceedings of
+limits the perspective of this paper, therefore we also expect cer-            the 2020 Conference on Fairness, Accountability, and Transparency. 648–657.
+tain details of our findings may not generalize. Nonetheless, we               https://doi.org/10.1145/3351095.3375624
+                                                                          [13] Rishi Bommasani, Drew A Hudson, Ehsan Adeli, Russ Altman, Simran Arora,
+believe that the high-level strategies for on-device ML shared in this         Sydney von Arx, Michael S Bernstein, Jeannette Bohg, Antoine Bosselut, Emma
+work—including budget design, strategies for investing in model                Brunskill, et al. 2021. On the opportunities and risks of foundation models.
+optimization, and proper compression evaluation—will generalize                arXiv preprint arXiv:2108.07258 (2021).
+                                                                          [14] Carolyn Boyce and Palena Neale. 2006. Conducting in-depth interviews: A guide
+to be useful for many different kinds of devices, domains, and ML              for designing and conducting in-depth interviews for evaluation input. Vol. 2.
+user experiences. We are eager to watch how this interdisciplinary             Pathfinder International Watertown, MA.
+                                                                          [15] Jagmohan Chauhan, Jathushan Rajasegaran, Suranga Seneviratne, Archan Misra,
+area of research progresses in the future and reflect back on the              Aruna Seneviratne, and Youngki Lee. 2018. Performance characterization of deep
+practices outlined in this work to see which have remained, which              learning models for breathing-based authentication on resource-constrained
+have been removed, and which have been reinvented.                             devices. Proceedings of the ACM on Interactive, Mobile, Wearable and Ubiquitous
+                                                                               Technologies 2, 4 (2018), 1–24.
+                                                                          [16] Jiasi Chen and Xukan Ran. 2019. Deep learning with edge computing: A review.
+8     CONCLUSION                                                               Proc. IEEE 107, 8 (2019), 1655–1674. https://doi.org/10.1109/jproc.2019.2921977
+                                                                          [17] Yu Cheng, Duo Wang, Pan Zhou, and Tao Zhang. 2018. Model compression and
+In this research we illustrated some of the pragmatic design consid-           acceleration for deep neural networks: The principles, progress, and challenges.
+erations that go into efficient on-device machine learning. While              IEEE Signal Processing Magazine 35, 1 (2018), 126–136. https://doi.org/10.1109/
+                                                                               msp.2017.2765695
+this paper is far less technical than related work from the ML litera-    [18] Minsik Cho, Keivan A. Vahid, Saurabh Adya, and Mohammad Rastegari. 2022.
+ture, we feel the interdisciplinary bridge to UX and product design            Differentiable k-means clustering layer for neural network compression. In
+are critical to bringing on-device ML into more approachable and               International Conference on Learning Representations. https://arxiv.org/abs/2108.
+                                                                               12659
+popular practice. Through the results of this study, we are able          [19] Tejalal Choudhary, Vipul Mishra, Anurag Goswami, and Jagannathan Saranga-
+to spotlight the holistic, end-to-end considerations that experts in           pani. 2020. A comprehensive survey on model compression and acceleration.
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                                                   Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+        Artificial Intelligence Review 53, 7 (2020), 5113–5155. https://doi.org/10.1007/            of the ACM on Human-Computer Interaction 4, CSCW1 (2020), 1–26.
+        s10462-020-09816-7                                                                     [44] Sara Hooker, Aaron Courville, Gregory Clark, Yann Dauphin, and Andrea
+ [20]   Ruixuan Dai, Chenyang Lu, Michael Avidan, and Thomas Kannampallil. 2021.                    Frome. 2019. What do compressed deep neural networks forget? arXiv preprint
+        Respwatch: Robust measurement of respiratory rate on smartwatches with                      arXiv:1911.05248 (2019).
+        photoplethysmography. In Proceedings of the International Conference on Internet-      [45] Sara Hooker, Nyalleng Moorosi, Gregory Clark, Samy Bengio, and Emily Denton.
+        of-Things Design and Implementation. 208–220.                                               2020. Characterising bias in compressed models. arXiv (2020). arXiv:2010.03058
+ [21]   Fernando Delgado, Stephen Yang, Michael Madaio, and Qian Yang. 2021. Stake-            [46] Aspen Hopkins and Serena Booth. 2021. Machine learning practices outside big
+        holder participation in AI: Beyond “add diverse stakeholders and stir”. arXiv               tech: How resource constraints challenge responsible development. In Proceed-
+        (2021).                                                                                     ings of the 2021 AAAI/ACM Conference on AI, Ethics, and Society. 134–145.
+ [22]   Lei Deng, Guoqi Li, Song Han, Luping Shi, and Yuan Xie. 2020. Model compres-           [47] Andrew G Howard, Menglong Zhu, Bo Chen, Dmitry Kalenichenko, Weijun
+        sion and hardware acceleration for neural networks: A comprehensive survey.                 Wang, Tobias Weyand, Marco Andreetto, and Hartwig Adam. 2017. Mobilenets:
+        Proc. IEEE 108, 4 (2020), 485–532. https://doi.org/10.1109/jproc.2020.2976475               Efficient convolutional neural networks for mobile vision applications. arXiv
+ [23]   Google Developers. Accessed 2022. Why on-device machine learning? https:                    abs/1704.04861 (2017). arXiv:1704.04861
+        //developers.google.com/learn/topics/on-device-ml/learn-more                           [48] Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan Allen-Zhu, Yuanzhi Li, Shean
+ [24]   Sauptik Dhar, Junyao Guo, Jiayi Liu, Samarth Tripathi, Unmesh Kurup, and                    Wang, Lu Wang, and Weizhu Chen. 2022. Lora: Low-rank adaptation of large
+        Mohak Shah. 2021. On-device machine learning: An algorithms and learning                    language models. International Conference on Learning Representations (2022).
+        theory perspective. ACM Transactions on Internet Things (2021). https://doi.           [49] Rui Hu, Yuanxiong Guo, Hongning Li, Qingqi Pei, and Yanmin Gong. 2020.
+        org/10.1145/3450494                                                                         Personalized federated learning with differential privacy. IEEE Internet of Things
+ [25]   Sauptik Dhar, Junyao Guo, Jiayi Liu, Samarth Tripathi, Unmesh Kurup, and                    Journal 7, 10 (2020), 9530–9539.
+        Mohak Shah. 2021. A survey of on-device machine learning: An algorithms and            [50] Intel. 2020. Neural Compressor. https://github.com/intel/neural-compressor
+        learning theory perspective. ACM Transactions on Internet of Things 2, 3 (2021),       [51] Linshan Jiang, Rui Tan, Xin Lou, and Guosheng Lin. 2021. On lightweight
+        1–49. https://doi.org/10.1145/3450494                                                       privacy-preserving collaborative learning for Internet of Things by independent
+ [26]   Ning Ding, Yujia Qin, Guang Yang, Fuchao Wei, Zonghan Yang, Yusheng Su,                     random projections. ACM Transactions on Internet of Things 2, 2 (2021), 1–32.
+        Shengding Hu, Yulin Chen, Chi-Min Chan, Weize Chen, et al. 2022. Delta tuning:         [52] Minsuk Kahng, Nikhil Thorat, Duen Horng Polo Chau, Fernanda B Viégas, and
+        A comprehensive study of parameter efficient methods for pre-trained language               Martin Wattenberg. 2018. Gan lab: Understanding complex deep generative mod-
+        models. arXiv preprint arXiv:2203.06904 (2022).                                             els using interactive visual experimentation. IEEE Transactions on Visualization
+ [27]   Ning Ding, Yujia Qin, Guang Yang, Fuchao Wei, Zonghan Yang, Yusheng Su,                     and Computer Graphics 25, 1 (2018), 1–11. https://poloclub.github.io/ganlab/
+        Shengding Hu, Yulin Chen, Chi-Min Chan, Weize Chen, et al. 2023. Parameter-            [53] Eleanor Knott, Aliya Hamid Rao, Kate Summers, and Chana Teeger. 2022. In-
+        efficient fine-tuning of large-scale pre-trained language models. Nature Machine            terviews in the social sciences. Nature Reviews Methods Primers 2, 1 (2022),
+        Intelligence 5, 3 (2023), 220–235.                                                          1–15.
+ [28]   Farah Fahim, Benjamin Hawks, Christian Herwig, James Hirschauer, Sergo Jin-            [54] Jakub Konečnỳ, H Brendan McMahan, Felix X Yu, Peter Richtárik,
+        dariani, Nhan Tran, Luca P Carloni, Giuseppe Di Guglielmo, Philip Harris, Jeffrey           Ananda Theertha Suresh, and Dave Bacon. 2016. Federated learning: Strategies
+        Krupa, et al. 2021. hls4ml: An open-source codesign workflow to empower                     for improving communication efficiency. arXiv preprint arXiv:1610.05492 (2016).
+        scientific low-power machine learning devices. (2021). arXiv:2103.05579                [55] Aditya Kusupati, Vivek Ramanujan, Raghav Somani, Mitchell Wortsman, Prateek
+ [29]   Usama Fayyad, Gregory Piatetsky-Shapiro, and Padhraic Smyth. 1996. The KDD                  Jain, Sham Kakade, and Ali Farhadi. 2020. Soft threshold weight reparameteri-
+        process for extracting useful knowledge from volumes of data. Commun. ACM                   zation for learnable sparsity. In International Conference on Machine Learning.
+        39, 11 (1996), 27–34.                                                                       PMLR, 5544–5555.
+ [30]   Zihao Fu, Haoran Yang, Anthony Man-Cho So, Wai Lam, Lidong Bing, and                   [56] Steinar Kvale. 2006. Dominance through interviews and dialogues. Qualitative
+        Nigel Collier. 2023. On the effectiveness of parameter-efficient fine-tuning.               Inquiry 12, 3 (2006), 480–500.
+        In Proceedings of the AAAI Conference on Artificial Intelligence, Vol. 37. 12799–      [57] Seongmin Lee, Benjamin Hoover, Hendrik Strobelt, Zijie J Wang, ShengYun
+        12807.                                                                                      Peng, Austin Wright, Kevin Li, Haekyu Park, Haoyang Yang, and Duen Horng
+ [31]   Trevor Gale, Erich Elsen, and Sara Hooker. 2019. The state of sparsity in deep              Chau. 2023. Diffusion explainer: Visual explanation for text-to-image stable
+        neural networks. arXiv preprint arXiv:1902.09574 (2019).                                    diffusion. arXiv preprint arXiv:2305.03509 (2023).
+ [32]   Amir Gholami, Sehoon Kim, Zhen Dong, Zhewei Yao, Michael W Mahoney,                    [58] Youpeng Li, Xuyu Wang, and Lingling An. 2023. Hierarchical clustering-based
+        and Kurt Keutzer. 2021. A survey of quantization methods for efficient neural               personalized federated learning for robust and fair human activity recogni-
+        network inference. arXiv (2021). arXiv:2103.13630                                           tion. Proceedings of the ACM on Interactive, Mobile, Wearable and Ubiquitous
+ [33]   Charlie Giattino, Edouard Mathieu, Veronika Samborska, Julia Broden, and                    Technologies 7, 1 (2023), 1–38.
+        Max Roser. 2022.         Artificial intelligence.     Our World in Data (2022).        [59] Vladislav Lialin, Vijeta Deshpande, and Anna Rumshisky. 2023. Scaling
+        https://ourworldindata.org/artificial-intelligence.                                         down to scale up: A guide to parameter-efficient fine-tuning. arXiv preprint
+ [34]   Graham R Gibbs. 2007. Thematic coding and categorizing. Analyzing Qualitative               arXiv:2303.15647 (2023).
+        Data 703 (2007), 38–56.                                                                [60] Q Vera Liao, Daniel Gruen, and Sarah Miller. 2020. Questioning the AI: Informing
+ [35]   Google. 2019. QKeras. https://github.com/google/qkeras                                      design practices for explainable AI user experiences. In Proceedings of the 2020
+ [36]   Jianping Gou, Baosheng Yu, Stephen J Maybank, and Dacheng Tao. 2021. Knowl-                 CHI Conference on Human Factors in Computing Systems. 1–15. https://doi.org/
+        edge distillation: A survey. International Journal of Computer Vision 129, 6 (2021),        10.1145/3313831.3376590
+        1789–1819. https://doi.org/10.1007/s11263-021-01453-z                                  [61] Daniyal Liaqat, Mohamed Abdalla, Pegah Abed-Esfahani, Moshe Gabel, Ta-
+ [37]   Renjie Gu, Chaoyue Niu, Fan Wu, Guihai Chen, Chun Hu, Chengfei Lyu, and                     tiana Son, Robert Wu, Andrea Gershon, Frank Rudzicz, and Eyal De Lara. 2019.
+        Zhihua Wu. 2021. From server-based to client-based machine learning: A                      WearBreathing: Real world respiratory rate monitoring using smartwatches. Pro-
+        comprehensive survey. Comput. Surveys 54, 1 (2021), 1–36. https://doi.org/10.               ceedings of the ACM on Interactive, Mobile, Wearable and Ubiquitous Technologies
+        1145/3424660                                                                                3, 2 (2019), 1–22.
+ [38]   Song Han, Huizi Mao, and William J Dally. 2016. Deep compression: Com-                 [62] Edgar Liberis and Nicholas D Lane. 2023. Differentiable neural network pruning
+        pressing deep neural networks with pruning, trained quantization and huffman                to enable smart applications on microcontrollers. Proceedings of the ACM on
+        coding. (2016).                                                                             Interactive, Mobile, Wearable and Ubiquitous Technologies 6, 4 (2023), 1–19.
+ [39]   Awni Hannun, Jagrit Digani, Angelos Katharopoulos, and Ronan Collobert.                [63] Lucas Liebenwein, Cenk Baykal, Brandon Carter, David Gifford, and Daniela
+        2023. MLX: Efficient and flexible machine learning on Apple silicon. https:                 Rus. 2021. Lost in pruning: The effects of pruning neural networks beyond test
+        //github.com/ml-explore                                                                     accuracy. Proceedings of Machine Learning and Systems 3 (2021), 93–138.
+ [40]   Charles Hill, Rachel Bellamy, Thomas Erickson, and Margaret Burnett. 2016.             [64] Wei Yang Bryan Lim, Nguyen Cong Luong, Dinh Thai Hoang, Yutao Jiao, Ying-
+        Trials and tribulations of developers of intelligent systems: A field study. In             Chang Liang, Qiang Yang, Dusit Niyato, and Chunyan Miao. 2020. Federated
+        2016 IEEE Symposium on Visual Languages and Human-Centric Computing. IEEE,                  learning in mobile edge networks: A comprehensive survey. IEEE Communica-
+        162–170. https://doi.org/10.1109/vlhcc.2016.7739680                                         tions Surveys & Tutorials 22, 3 (2020), 2031–2063. https://doi.org/10.1109/comst.
+ [41]   Torsten Hoefler, Dan Alistarh, Tal Ben-Nun, Nikoli Dryden, and Alexandra Peste.             2020.2986024
+        2021. Sparsity in deep learning: Pruning and growth for efficient inference and        [65] Sicong Liu, Bin Guo, Ke Ma, Zhiwen Yu, and Junzhao Du. 2021. AdaSpring:
+        training in neural networks. Journal of Machine Learning Research 22, 241 (2021),           Context-adaptive and runtime-evolutionary deep model compression for mo-
+        1–124.                                                                                      bile applications. Proceedings of the ACM on Interactive, Mobile, Wearable and
+ [42]   Kenneth Holstein, Jennifer Wortman Vaughan, Hal Daumé III, Miro Dudik, and                  Ubiquitous Technologies 5, 1 (2021), 1–22.
+        Hanna Wallach. 2019. Improving fairness in machine learning systems: What do           [66] Michael Madaio, Lisa Egede, Hariharan Subramonyam, Jennifer Wort-
+        industry practitioners need?. In Proceedings of the 2019 CHI Conference on Human            man Vaughan, and Hanna Wallach. 2022. Assessing the fairness of AI systems:
+        Factors in Computing Systems. 1–16. https://doi.org/10.1145/3290605.3300830                 AI practitioners’ processes, challenges, and needs for support. Proceedings of
+ [43]   Sungsoo Ray Hong, Jessica Hullman, and Enrico Bertini. 2020. Human factors
+        in model interpretability: Industry practices, challenges, and needs. Proceedings
+Model Compression in Practice                                                                                                     CHI ’24, May 11–16, 2024, Honolulu, HI, USA
+
+
+      the ACM on Human-Computer Interaction 6, CSCW1 (2022), 1–26.                              Workshop on Vis for Deep Learning.
+ [67] Michael A Madaio, Luke Stark, Jennifer Wortman Vaughan, and Hanna Wallach.           [93] Irene Solaiman, Zeerak Talat, William Agnew, Lama Ahmad, Dylan Baker,
+      2020. Co-designing checklists to understand organizational challenges and                 Su Lin Blodgett, Hal Daumé III, Jesse Dodge, Ellie Evans, Sara Hooker, et al.
+      opportunities around fairness in AI. In Proceedings of the 2020 CHI Conference            2023. Evaluating the social impact of generative AI systems in systems and
+      on Human Factors in Computing Systems. 1–14.                                              cociety. arXiv preprint arXiv:2306.05949 (2023).
+ [68] Gaurav Menghani. 2023. Efficient deep learning: A survey on making deep              [94] Stanford. 2023. The AI index report: Measuring trends in artificial intelligence.
+      learning models smaller, faster, and better. Comput. Surveys 55, 12 (2023), 1–37.         https://aiindex.stanford.edu/report/
+ [69] Microsoft. 2021. Neural network intelligence. https://github.com/microsoft/nni       [95] Mingxing Tan and Quoc Le. 2019. Efficientnet: Rethinking model scaling for
+ [70] Rahul Mishra and Hari Prabhat Gupta. 2023. Designing and training of light-               convolutional neural networks. In International Conference on Machine Learning.
+      weight neural networks on edge devices using early halting in knowledge                   PMLR, 6105–6114. arXiv:1905.11946
+      distillation. IEEE Transactions on Mobile Computing (2023).                          [96] TensorFlow. 2018. Introducing the Model Optimization Toolkit for Tensor-
+ [71] Rahul Mishra, Hari Prabhat Gupta, and Tanima Dutta. 2020. Teacher, trainee, and           Flow. https://blog.tensorflow.org/2018/09/introducing-model-optimization-
+      student based knowledge distillation technique for monitoring indoor activities.          toolkit.html
+      In Proceedings of the 18th Conference on Embedded Networked Sensor Systems.          [97] TensorFlow. 2020.            Quantization aware training with TensorFlow
+      729–730.                                                                                  Model Optimization Toolkit - performance with accuracy.                     https:
+ [72] Ceena Modarres, Mark Ibrahim, Melissa Louie, and John Paisley. 2018. Towards              //blog.tensorflow.org/2020/04/quantization-aware-training-with-tensorflow-
+      explainable deep learning for credit lending: A case study. arXiv (2018).                 model-optimization-toolkit.html
+ [73] Steven Gonzalez Monserrate. 2022. The cloud is material: On the environmental        [98] David R Thomas. 2003. A general inductive approach for qualitative data
+      impacts of computation and data storage. MIT Case Studies in Social and Ethical           analysis. American Journal of Evaluation 27, 2 (2003), 237–246.
+      Responsibilities of Computing Winter 2022 (Jan 2022). https://doi.org/10.21428/      [99] Nenad Tomašev, Julien Cornebise, Frank Hutter, Shakir Mohamed, Angela
+      2c646de5.031d4553                                                                         Picciariello, Bec Connelly, Danielle CM Belgrave, Daphne Ezer, Fanny Cachat
+ [74] Rajiv Movva, Sidhika Balachandar, Kenny Peng, Gabriel Agostini, Nikhil Garg,              van der Haert, Frank Mugisha, et al. 2020. AI for social good: Unlocking the
+      and Emma Pierson. 2023. Large language models shape and are shaped by                     opportunity for positive impact. Nature Communications 11, 1 (2020), 2468.
+      society: A survey of arXiv publication patterns. arXiv preprint arXiv:2307.10700    [100] Hugo Touvron, Matthieu Cord, Matthijs Douze, Francisco Massa, Alexandre
+      (2023).                                                                                   Sablayrolles, and Hervé Jégou. 2021. Training data-efficient image transformers
+ [75] MG Sarwar Murshed, Christopher Murphy, Daqing Hou, Nazar Khan, Ganesh                     & distillation through attention. In International Conference on Machine Learning.
+      Ananthanarayanan, and Faraz Hussain. 2021. Machine learning at the network                PMLR, 10347–10357.
+      edge: A survey. Comput. Surveys 54, 8 (2021), 1–37. https://doi.org/10.1145/        [101] Marcos Treviso, Ji-Ung Lee, Tianchu Ji, Betty van Aken, Qingqing Cao, Manuel R
+      3469029                                                                                   Ciosici, Michael Hassid, Kenneth Heafield, Sara Hooker, Colin Raffel, et al. 2023.
+ [76] NVIDIA. 2023. NVIDIA deep learning TensorRT documentation - optimiz-                      Efficient methods for natural language processing: A survey. Transactions of
+      ing TensorRT performance. https://docs.nvidia.com/deeplearning/tensorrt/                  the Association for Computational Linguistics 11 (2023), 826–860.
+      developer-guide/index.html                                                          [102] Pavan Kumar Anasosalu Vasu, James Gabriel, Jeff Zhu, Oncel Tuzel, and Anurag
+ [77] Kelechi Ogueji, Orevaoghene Ahia, Gbemileke Onilude, Sebastian Gehrmann,                  Ranjan. 2023. FastViT: A fast hybrid vision transformer using structural repa-
+      Sara Hooker, and Julia Kreutzer. 2022. Intriguing properties of compression on            rameterization. arXiv preprint arXiv:2303.14189 (2023).
+      multilingual models. arXiv preprint arXiv:2211.02738 (2022).                        [103] Pavan Kumar Anasosalu Vasu, James Gabriel, Jeff Zhu, Oncel Tuzel, and Anurag
+ [78] Razvan Pascanu, Tomas Mikolov, and Yoshua Bengio. 2013. On the difficulty                 Ranjan. 2023. An improved one millisecond mobile backbone. (2023).
+      of training recurrent neural networks. In International Conference on Machine       [104] Pablo Villalobos, Jaime Sevilla, Tamay Besiroglu, Lennart Heim, Anson Ho, and
+      Learning. PMLR, 1310–1318.                                                                Marius Hobbhahn. 2022. Machine learning model sizes and the parameter gap.
+ [79] Samir Passi and Steven J Jackson. 2018. Trust in data science: Collaboration,             arXiv:2207.02852 [cs.LG]
+      translation, and accountability in corporate data science projects. Proceedings     [105] Dakuo Wang, Josh Andres, Justin D Weisz, Erick Oduor, and Casey Dugan. 2021.
+      of the ACM on Human-Computer Interaction 2, CSCW (2018), 1–28.                            Autods: Towards human-centered automation of data science. In Proceedings of
+ [80] Kayur Patel, James Fogarty, James A Landay, and Beverly Harrison. 2008. In-               the 2021 CHI Conference on Human Factors in Computing Systems. 1–12.
+      vestigating statistical machine learning as a tool for software development. In     [106] Dakuo Wang, Q Vera Liao, Yunfeng Zhang, Udayan Khurana, Horst Samulowitz,
+      Proceedings of the SIGCHI Conference on Human Factors in Computing Systems.               Soya Park, Michael Muller, and Lisa Amini. 2021. How much automation does
+      667–676. https://doi.org/10.1145/1357054.1357160                                          a data scientist want? arXiv (2021).
+ [81] David Piorkowski, Soya Park, April Yi Wang, Dakuo Wang, Michael Muller, and         [107] Dakuo Wang, Justin D Weisz, Michael Muller, Parikshit Ram, Werner Geyer,
+      Felix Portnoy. 2021. How ai developers overcome communication challenges                  Casey Dugan, Yla Tausczik, Horst Samulowitz, and Alexander Gray. 2019.
+      in a multidisciplinary team: A case study. Proceedings of the ACM on Human-               Human-AI collaboration in data science: Exploring data scientists’ perceptions
+      Computer Interaction 5, CSCW1 (2021), 1–25.                                               of automated AI. Proceedings of the ACM on Human-Computer Interaction 3,
+ [82] Antonio Polino, Razvan Pascanu, and Dan Alistarh. 2018. Model compression                 CSCW (2019), 1–24.
+      via distillation and quantization. arXiv (2018). arXiv:1802.05668                   [108] Yanfei Wang, Zhiwen Yu, Sicong Liu, Zimu Zhou, and Bin Guo. 2023. Genie in
+ [83] PyTorch. 2018. Quantization. https://pytorch.org/docs/stable/quantization.html            the model: Automatic generation of human-in-the-loop deep neural networks
+ [84] PyTorch. 2019. Sparisty. https://pytorch.org/docs/stable/sparse.html                      for mobile applications. Proceedings of the ACM on Interactive, Mobile, Wearable
+ [85] PyTorch. 2023. PyTorch Examples. https://pytorch.org/tutorials/                           and Ubiquitous Technologies 7, 1 (2023), 1–29.
+ [86] Bogdana Rakova, Jingying Yang, Henriette Cramer, and Rumman Chowdhury.              [109] Zijie J. Wang, Robert Turko, Omar Shaikh, Haekyu Park, Nilaksh Das, Fred
+      2021. Where responsible AI meets reality: Practitioner perspectives on en-                Hohman, Minsuk Kahng, and Duen Horng (Polo) Chau. 2021. CNN explainer:
+      ablers for shifting organizational practices. Proceedings of the ACM on Human-            Learning convolutional neural networks with interactive visualization. In IEEE
+      Computer Interaction 5, CSCW1 (2021), 1–23.                                               Transactions on Visualization and Computer Graphics. IEEE. https://doi.org/10.
+ [87] Samantha Robertson, Tonya Nguyen, and Niloufar Salehi. 2021. Modeling                     1109/TVCG.2020.3030418
+      assumptions clash with the real world: Transparency, equity, and community          [110] Pete Warden and Daniel Situnayake. 2019. Tinyml: Machine learning with
+      challenges for student assignment algorithms. In Proceedings of the 2021 CHI              tensorflow lite on arduino and ultra-low-power microcontrollers. O’Reilly Media.
+      Conference on Human Factors in Computing Systems. 1–14.                             [111] Megan Maher Welsh, David Koski, Miguel Sarabia, Niv Sivakumar, Ian Arawjo,
+ [88] Nithya Sambasivan, Shivani Kapania, Hannah Highfill, Diana Akrong, Praveen                Aparna Joshi, Moussa Doumbouya, Luca Suau, Xavierand Zappella, and Nicholas
+      Paritosh, and Lora M Aroyo. 2021. “Everyone wants to do the model work,                   Apostoloff. 2023. Data and Network Introspection Kit. https://github.com/apple/
+      not the data work”: Data cascades in high-stakes AI. In Proceedings of the                dnikit
+      2021 CHI Conference on Human Factors in Computing Systems. 1–15. https:             [112] Maximiliane Windl, Sebastian S Feger, Lara Zijlstra, Albrecht Schmidt, and
+      //doi.org/10.1145/3411764.3445518                                                         Pawel W Wozniak. 2022. ’It is not always discovery time’: Four pragmatic
+ [89] Mark Sandler, Andrew Howard, Menglong Zhu, Andrey Zhmoginov, and Liang-                   approaches in designing AI systems. In CHI Conference on Human Factors in
+      Chieh Chen. 2018. Mobilenetv2: Inverted residuals and linear bottlenecks. In              Computing Systems. 1–12.
+      Proceedings of the IEEE Conference on Computer Vision and pattern Recognition.      [113] Rüdiger Wirth and Jochen Hipp. 2000. CRISP-DM: Towards a standard process
+      4510–4520. https://doi.org/10.1109/cvpr.2018.00474                                        model for data mining. In Proceedings of the 4th international conference on the
+ [90] Edgar H Schein. 1990. Organizational culture. Vol. 45. American Psychological             practical applications of knowledge discovery and data mining, Vol. 1. Manchester,
+      Association.                                                                              29–39.
+ [91] Abhishek Sehgal and Nasser Kehtarnavaz. 2019. Guidelines and benchmarks for         [114] Austin P. Wright, Zijie J. Wang, Haekyu Park, Grace Guo, Fabian Sperrle, Men-
+      deployment of deep learning models on smartphones as real-time apps. Machine              natallah El-Assady, Alex Endert, Daniel Keim, and Duen Horng Chau. 2020. A
+      Learning and Knowledge Extraction 1, 1 (2019), 450–465.                                   comparative analysis of industry human-AI interaction guidelines. Workshop
+ [92] Daniel Smilkov, Shan Carter, D Sculley, Fernanda B Viegas, and Martin Wat-                on Trust and Expertise in Visual Analytics at IEEE VIS (2020).
+      tenberg. 2016. Direct-manipulation visualization of deep networks. In ICML
+CHI ’24, May 11–16, 2024, Honolulu, HI, USA                                                               Fred Hohman, Mary Beth Kery, Donghao Ren, and Dominik Moritz
+
+
+[115] Junru Wu, Yue Wang, Zhenyu Wu, Zhangyang Wang, Ashok Veeraraghavan,                [130] Ce Zhou, Qian Li, Chen Li, Jun Yu, Yixin Liu, Guangjing Wang, Kai Zhang,
+      and Yingyan Lin. 2018. Deep k-means: Re-training and parameter sharing with              Cheng Ji, Qiben Yan, Lifang He, et al. 2023. A comprehensive survey on pre-
+      harder cluster assignments for compressing deep convolutions. In International           trained foundation models: A history from BERT to ChatGPT. arXiv preprint
+      Conference on Machine Learning. PMLR, 5363–5372.                                         arXiv:2302.09419 (2023).
+[116] Canwen Xu and Julian McAuley. 2023. A survey on model compression and ac-          [131] Zhi Zhou, Xu Chen, En Li, Liekang Zeng, Ke Luo, and Junshan Zhang. 2019. Edge
+      celeration for pretrained language models. In Proceedings of the AAAI Conference         intelligence: Paving the last mile of artificial intelligence with edge computing.
+      on Artificial Intelligence, Vol. 37. 10566–10575.                                        Proc. IEEE 107, 8 (2019), 1738–1762. https://doi.org/10.1109/jproc.2019.2918951
+[117] Xuhai Xu, Jun Gong, Carolina Brum, Lilian Liang, Bongsoo Suh, Shivam Kumar         [132] Mingjian Zhu, Kai Han, Enhua Wu, Qiulin Zhang, Ying Nie, Zhenzhong Lan,
+      Gupta, Yash Agarwal, Laurence Lindsey, Runchang Kang, Behrooz Shahsavari,                and Yunhe Wang. 2021. Dynamic resolution network. Advances in Neural
+      et al. 2022. Enabling hand gesture customization on wrist-worn devices. In               Information Processing Systems 34 (2021), 27319–27330. arXiv:2106.02898
+      Proceedings of the 2022 CHI Conference on Human Factors in Computing Systems.
+      1–19.
+[118] Qian Yang. 2018. Machine learning as a UX design material: How can we              A     INTERVIEW QUESTIONS
+      imagine beyond automation, recommenders, and reminders?. In AAAI Spring
+      Symposium Series.
+                                                                                         The list of questions prepared for each interview participant.
+[119] Qian Yang, Alex Scuito, John Zimmerman, Jodi Forlizzi, and Aaron Steinfeld.
+      2018. Investigating how experienced UX designers effectively work with ma-
+      chine learning. In Proceedings of the 2018 Designing Interactive Systems Confer-
+      ence. 585–596.
+                                                                                         Background ML Information
+[120] Dixi Yao, Liyao Xiang, Zifan Wang, Jiayu Xu, Chao Li, and Xinbing Wang.              Q1. What is your team?
+      2021. Context-aware compilation of dnn training pipelines across edge and
+      cloud. Proceedings of the ACM on Interactive, Mobile, Wearable and Ubiquitous
+                                                                                           Q2. What is your role?
+      Technologies 5, 4 (2021), 1–27.                                                      Q3. How many years of ML experience do you have?
+[121] Nur Yildirim, Alex Kass, Teresa Tung, Connor Upton, Donnacha Costello, Robert        Q4. How many years of efficient ML experience do you have?
+      Giusti, Sinem Lacin, Sara Lovic, James M O’Neill, Rudi O’Reilly Meehan, et al.
+      2022. How experienced designers of enterprise applications engage AI as a          General Compression Questions
+      design material. In CHI Conference on Human Factors in Computing Systems.            Q5. Describe the overall use case for model compression in your
+      1–13.
+[122] Marwa Zamzam, Tallal Elshabrawy, and Mohamed Ashour. 2019. Resource                      work. What are your main motivations to use model compres-
+      management using machine learning in mobile edge computing: A survey. In                 sion? Why do you care about model compression?
+      2019 Ninth International Conference on Intelligent Computing and Information         Q6. Model compression details:
+      Systems. IEEE, 112–117. https://doi.org/10.1109/icicis46948.2019.9014733
+[123] Sabah Zdanowska and Alex S Taylor. 2022. A study of UX practitioners roles               Q6.1 Which model compression techniques do you use, and
+      in designing real-world, enterprise ML systems. In CHI Conference on Human                     why? Are there trade offs or preferences?
+      Factors in Computing Systems. 1–15.
+[124] Amy X Zhang, Michael Muller, and Dakuo Wang. 2020. How do data science
+                                                                                               Q6.2 Do you do compression as a final step or as a part of the
+      workers collaborate? Roles, workflows, and tools. Proceedings of the ACM on                    training process?
+      Human-Computer Interaction 4, CSCW1 (2020), 1–23.                                        Q6.3 In your experience, are there any pitfalls people applying
+[125] Xiangyu Zhang, Xinyu Zhou, Mengxiao Lin, and Jian Sun. 2018. Shufflenet:
+      An extremely efficient convolutional neural network for mobile devices. In                     compression should be aware of?
+      Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition.           Q6.4 How did you figure out your budgets and how did you
+      6848–6856. https://doi.org/10.1109/cvpr.2018.00716                                             satisfy them?
+[126] Tianming Zhao, Yucheng Xie, Yan Wang, Jerry Cheng, Xiaonan Guo, Bin Hu, and
+      Yingying Chen. 2022. A survey of deep learning on mobile devices: Applications,      Q7. Do you compare compressed models against baseline models? If
+      optimizations, challenges, and research opportunities. Proc. IEEE 110, 3 (2022),         so, how, and what do you look for, e.g., power and performance,
+      334–354. https://doi.org/10.1109/jproc.2022.3153408
+[127] Wayne Xin Zhao, Kun Zhou, Junyi Li, Tianyi Tang, Xiaolei Wang, Yupeng Hou,
+                                                                                               other metrics, or user experience changes?
+      Yingqian Min, Beichen Zhang, Junjie Zhang, Zican Dong, et al. 2023. A survey       Compression Tooling Questions
+      of large language models. arXiv preprint arXiv:2303.18223 (2023).
+[128] Yong Zhao, Jinyu Li, and Yifan Gong. 2016. Low-rank plus diagonal adaptation         Q8. What tools or visualizations do you use in your compression
+      for deep neural networks. In IEEE International Conference on Acoustics, Speech          work? Please be specific, e.g., specific charts, views, or metrics.
+      and Signal Processing. IEEE, 5005–5009.
+[129] Peining Zhen, Hai-Bao Chen, Yuan Cheng, Zhigang Ji, Bin Liu, and Hao Yu. 2021.
+                                                                                               How do you use these tools?
+      Fast video facial expression recognition by a deeply tensor-compressed LSTM          Q9. What do you like about these tools?
+      neural network for mobile devices. ACM Transactions on Internet of Things 2, 4      Q10. What features or future tools would help you conduct better
+      (2021), 1–26.
+                                                                                               model compression work?
+
